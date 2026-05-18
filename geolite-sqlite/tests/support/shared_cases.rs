@@ -1,6 +1,6 @@
 macro_rules! define_shared_cases {
     ($test_attr:meta) => {
-// ── I/O round-trips ───────────────────────────────────────────────────────────
+// -- I/O round-trips -----------------------------------------------------------
 
 fn assert_i32_out_of_range_error(
     db: &ActiveTestDb,
@@ -183,7 +183,7 @@ fn geomfromgeojson_rejects_two_arg_signature() {
     );
 }
 
-// ── Constructors ──────────────────────────────────────────────────────────────
+// -- Constructors --------------------------------------------------------------
 
 #[$test_attr]
 fn st_make_envelope() {
@@ -196,7 +196,7 @@ fn st_make_envelope() {
 fn st_tile_envelope_zoom0() {
     let db = ActiveTestDb::open();
     let area = db.query_f64("SELECT ST_Area(ST_TileEnvelope(0, 0, 0))");
-    // Full web-mercator extent squared: (2 * 20037508.34)^2 ≈ 1.607e15
+    // Full web-mercator extent squared: (2 * 20037508.34)^2 approximately  1.607e15
     assert!(area > 1e15, "area = {area}");
 }
 
@@ -344,7 +344,7 @@ fn st_collect() {
     assert_eq!(n, 2);
 }
 
-// ── Accessors ─────────────────────────────────────────────────────────────────
+// -- Accessors -----------------------------------------------------------------
 
 #[$test_attr]
 fn st_srid_default() {
@@ -760,7 +760,7 @@ fn st_is_valid_reason() {
     assert_eq!(r, "Valid Geometry");
 }
 
-// ── Measurement ───────────────────────────────────────────────────────────────
+// -- Measurement ---------------------------------------------------------------
 
 #[$test_attr]
 fn st_area_unit_square() {
@@ -1292,7 +1292,7 @@ fn st_closest_point_empty_target_point_errors() {
     assert!(err.contains("does not accept empty points"), "unexpected error: {err}");
 }
 
-// ── Predicates ────────────────────────────────────────────────────────────────
+// -- Predicates ----------------------------------------------------------------
 
 #[$test_attr]
 fn st_intersects() {
@@ -1464,7 +1464,7 @@ fn st_relate_match_invalid_matrix_errors() {
     );
 }
 
-// ── Alias function tests ─────────────────────────────────────────────────────
+// -- Alias function tests -----------------------------------------------------
 
 #[$test_attr]
 fn st_make_point_alias() {
@@ -1504,7 +1504,7 @@ fn st_perimeter2d_alias() {
     assert!((p - 4.0).abs() < 1e-10, "perimeter2d = {p}");
 }
 
-// ── NULL input handling tests ────────────────────────────────────────────────
+// -- NULL input handling tests ------------------------------------------------
 
 #[$test_attr]
 fn null_input_st_astext() {
@@ -1702,7 +1702,7 @@ fn empty_blob_input_reports_error_not_null() {
     assert!(res.is_err(), "empty blob should be rejected, got: {res:?}");
 }
 
-// ── Multi-geometry tests ─────────────────────────────────────────────────────
+// -- Multi-geometry tests -----------------------------------------------------
 
 #[$test_attr]
 fn st_npoints_multipoint() {
@@ -1854,7 +1854,7 @@ fn st_perimeter_multipolygon() {
     assert!((p - 12.0).abs() < 1e-10, "perimeter = {p}");
 }
 
-// ── Mixed-type distance tests ────────────────────────────────────────────────
+// -- Mixed-type distance tests ------------------------------------------------
 
 #[$test_attr]
 fn st_distance_point_to_linestring() {
@@ -1901,7 +1901,7 @@ fn st_distance_polygon_to_polygon() {
     assert!((d - 2.0).abs() < 1e-10, "distance = {d}");
 }
 
-// ── Validity edge cases ──────────────────────────────────────────────────────
+// -- Validity edge cases ------------------------------------------------------
 
 #[$test_attr]
 fn st_is_valid_invalid_polygon() {
@@ -1920,7 +1920,7 @@ fn st_is_valid_reason_invalid_polygon() {
     assert_ne!(r, "Valid Geometry", "got: {r}");
 }
 
-// ── MultiLineString spherical length ─────────────────────────────────────────
+// -- MultiLineString spherical length -----------------------------------------
 
 #[$test_attr]
 fn st_length_sphere_multilinestring() {
@@ -1928,11 +1928,11 @@ fn st_length_sphere_multilinestring() {
     let l = db.query_f64(
         "SELECT ST_LengthSphere(ST_GeomFromText('MULTILINESTRING((-0.1278 51.5074, 2.3522 48.8566),(2.3522 48.8566, 13.4050 52.5200))', 4326))",
     );
-    // London→Paris + Paris→Berlin, should be > 600km
+    // London->Paris + Paris->Berlin, should be > 600km
     assert!(l > 600_000.0, "length_sphere = {l}");
 }
 
-// ── MultiLineString planar length ────────────────────────────────────────────
+// -- MultiLineString planar length --------------------------------------------
 
 #[$test_attr]
 fn st_length_multilinestring() {
@@ -1943,7 +1943,7 @@ fn st_length_multilinestring() {
     assert!((l - 10.0).abs() < 1e-10, "length = {l}");
 }
 
-// ── Dimension for various types ──────────────────────────────────────────────
+// -- Dimension for various types ----------------------------------------------
 
 #[$test_attr]
 fn st_dimension_point() {
@@ -1982,7 +1982,7 @@ fn st_dimension_multipolygon() {
     assert_eq!(d, 2);
 }
 
-// ── Centroid of a LineString ─────────────────────────────────────────────────
+// -- Centroid of a LineString -------------------------------------------------
 
 #[$test_attr]
 fn st_centroid_linestring() {
@@ -1991,7 +1991,7 @@ fn st_centroid_linestring() {
     assert!((cx - 5.0).abs() < 1e-10, "cx = {cx}");
 }
 
-// ── Num rings with holes ─────────────────────────────────────────────────────
+// -- Num rings with holes -----------------------------------------------------
 
 #[$test_attr]
 fn st_num_rings_with_hole() {
@@ -2002,7 +2002,7 @@ fn st_num_rings_with_hole() {
     assert_eq!(n, 2); // exterior + 1 interior
 }
 
-// ── Spatial Index tests ──────────────────────────────────────────────────────
+// -- Spatial Index tests ------------------------------------------------------
 
 #[$test_attr]
 fn spatial_index_create_query_drop() {
@@ -2188,32 +2188,32 @@ fn spatial_index_trigger_sync() {
     db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, geom BLOB)");
     db.exec("SELECT CreateSpatialIndex('t', 'geom')");
 
-    // INSERT with non-NULL geom → appears in R-tree
+    // INSERT with non-NULL geom -> appears in R-tree
     db.exec("INSERT INTO t (geom) VALUES (ST_Point(1, 2))");
     let count = db.query_i64("SELECT COUNT(*) FROM t_geom_rtree");
     assert_eq!(count, 1);
 
-    // INSERT with NULL geom → not in R-tree
+    // INSERT with NULL geom -> not in R-tree
     db.exec("INSERT INTO t (geom) VALUES (NULL)");
     let count = db.query_i64("SELECT COUNT(*) FROM t_geom_rtree");
     assert_eq!(count, 1); // still 1
 
-    // UPDATE geom → R-tree updated
+    // UPDATE geom -> R-tree updated
     db.exec("UPDATE t SET geom = ST_Point(10, 20) WHERE id = 1");
     let xmin = db.query_f64("SELECT xmin FROM t_geom_rtree WHERE id = 1");
     assert!((xmin - 10.0).abs() < 1e-10, "xmin = {xmin}");
 
-    // UPDATE geom to NULL → removed from R-tree
+    // UPDATE geom to NULL -> removed from R-tree
     db.exec("UPDATE t SET geom = NULL WHERE id = 1");
     let count = db.query_i64("SELECT COUNT(*) FROM t_geom_rtree WHERE id = 1");
     assert_eq!(count, 0);
 
-    // UPDATE NULL → non-NULL → added to R-tree
+    // UPDATE NULL -> non-NULL -> added to R-tree
     db.exec("UPDATE t SET geom = ST_Point(7, 8) WHERE id = 2");
     let count = db.query_i64("SELECT COUNT(*) FROM t_geom_rtree WHERE id = 2");
     assert_eq!(count, 1);
 
-    // DELETE → removed from R-tree
+    // DELETE -> removed from R-tree
     db.exec("DELETE FROM t WHERE id = 2");
     let count = db.query_i64("SELECT COUNT(*) FROM t_geom_rtree");
     assert_eq!(count, 0);
@@ -2243,7 +2243,7 @@ fn spatial_index_narrows_candidates() {
     let db = ActiveTestDb::open();
     db.exec("CREATE TABLE grid (id INTEGER PRIMARY KEY, geom BLOB)");
 
-    // Insert 100 points in a 10×10 grid: (0,0) through (9,9)
+    // Insert 100 points in a 10x10 grid: (0,0) through (9,9)
     for x in 0..10 {
         for y in 0..10 {
             db.exec(&format!(
@@ -2256,7 +2256,7 @@ fn spatial_index_narrows_candidates() {
     let full_scan = db.query_i64("SELECT COUNT(*) FROM grid");
     assert_eq!(full_scan, 100);
 
-    // R-tree query for bbox [1.5,1.5 → 3.5,3.5] should return only 4 points: (2,2),(2,3),(3,2),(3,3)
+    // R-tree query for bbox [1.5,1.5 -> 3.5,3.5] should return only 4 points: (2,2),(2,3),(3,2),(3,3)
     let rtree_hits = db.query_all_i64(
         "SELECT g.id FROM grid g \
          JOIN grid_geom_rtree r ON g.rowid = r.id \
@@ -2920,12 +2920,12 @@ fn spatial_index_drop_fails_when_catalog_schema_is_malformed_without_dropping_ma
     );
 }
 
-// ── Boolean operations ────────────────────────────────────────────────────────
+// -- Boolean operations --------------------------------------------------------
 
 #[$test_attr]
 fn st_union_overlapping_polygons() {
     let db = ActiveTestDb::open();
-    // Two 2×2 squares overlapping by 1×2 strip → union area = 6
+    // Two 2x2 squares overlapping by 1x2 strip -> union area = 6
     let area = db.query_f64(
         "SELECT ST_Area(ST_Union(\
             ST_GeomFromText('POLYGON((0 0,2 0,2 2,0 2,0 0))'),\
@@ -2950,7 +2950,7 @@ fn st_union_disjoint_returns_combined_area() {
 #[$test_attr]
 fn st_intersection_overlapping_polygons() {
     let db = ActiveTestDb::open();
-    // Intersection of the same two squares = 1×2 strip → area = 2
+    // Intersection of the same two squares = 1x2 strip -> area = 2
     let area = db.query_f64(
         "SELECT ST_Area(ST_Intersection(\
             ST_GeomFromText('POLYGON((0 0,2 0,2 2,0 2,0 0))'),\
@@ -2975,7 +2975,7 @@ fn st_intersection_disjoint_is_empty() {
 #[$test_attr]
 fn st_difference_overlapping_polygons() {
     let db = ActiveTestDb::open();
-    // A(2×2) minus overlap(1×2) = left strip, area = 2
+    // A(2x2) minus overlap(1x2) = left strip, area = 2
     let area = db.query_f64(
         "SELECT ST_Area(ST_Difference(\
             ST_GeomFromText('POLYGON((0 0,2 0,2 2,0 2,0 0))'),\
@@ -2988,7 +2988,7 @@ fn st_difference_overlapping_polygons() {
 #[$test_attr]
 fn st_symdifference_overlapping_polygons() {
     let db = ActiveTestDb::open();
-    // SymDiff of two 2×2 overlapping by 1×2 = 2 + 2 = 4
+    // SymDiff of two 2x2 overlapping by 1x2 = 2 + 2 = 4
     let area = db.query_f64(
         "SELECT ST_Area(ST_SymDifference(\
             ST_GeomFromText('POLYGON((0 0,2 0,2 2,0 2,0 0))'),\
@@ -3004,7 +3004,7 @@ fn st_buffer_point_has_positive_area() {
     let area = db.query_f64(
         "SELECT ST_Area(ST_Buffer(ST_GeomFromText('POINT(0 0)'), 1.0))",
     );
-    // Area of a radius-1 circle ≈ π ≈ 3.14159
+    // Area of a radius-1 circle approximately  pi approximately  3.14159
     assert!(
         (area - std::f64::consts::PI).abs() < 0.1,
         "ST_Buffer(point,1) area = {area}"
@@ -3017,7 +3017,7 @@ fn st_buffer_polygon_grows_area() {
     let area = db.query_f64(
         "SELECT ST_Area(ST_Buffer(ST_GeomFromText('POLYGON((0 0,4 0,4 4,0 4,0 0))'), 1.0))",
     );
-    // Buffered square is larger than the original 4×4 = 16
+    // Buffered square is larger than the original 4x4 = 16
     assert!(area > 16.0, "buffered polygon area ({area}) should exceed original");
 }
 
@@ -3030,7 +3030,7 @@ fn st_buffer_empty_returns_empty_polygon() {
     assert_eq!(is_empty, 1, "buffer of empty geometry should be empty");
 }
 
-// ── Alias functions ───────────────────────────────────────────────────────────
+// -- Alias functions -----------------------------------------------------------
 
 #[$test_attr]
 fn st_makepoint_is_alias_for_st_point() {
@@ -3102,7 +3102,7 @@ fn st_perimeter2d_is_alias_for_st_perimeter() {
     assert!((via_2d - via_plain).abs() < 1e-10, "ST_Perimeter2D must equal ST_Perimeter");
 }
 
-// ── Group 1 correctness ───────────────────────────────────────────────────────
+// -- Group 1 correctness -------------------------------------------------------
 
 #[$test_attr]
 fn st_num_rings_empty_polygon() {
@@ -3118,7 +3118,7 @@ fn st_make_envelope_inverted_coords_errors() {
         .expect_err("inverted xmin/xmax should return an error");
 }
 
-// ── Index-aware query pattern tests ──────────────────────────────────────────
+// -- Index-aware query pattern tests ------------------------------------------
 
 #[$test_attr]
 fn spatial_index_intersects_window() {
@@ -3153,7 +3153,7 @@ fn spatial_index_intersects_window() {
     );
 
     assert_eq!(indexed, non_indexed, "indexed and non-indexed must match");
-    assert_eq!(indexed.len(), 16); // (2..=5, 2..=5) = 4×4 = 16
+    assert_eq!(indexed.len(), 16); // (2..=5, 2..=5) = 4x4 = 16
 }
 
 #[$test_attr]
@@ -3268,7 +3268,7 @@ fn spatial_index_geodesic_radius() {
     ));
 
     assert_eq!(indexed, non_indexed);
-    // London→Paris ≈ 344 km (within), London→Berlin ≈ 930 km (outside)
+    // London->Paris approximately  344 km (within), London->Berlin approximately  930 km (outside)
     assert_eq!(indexed, vec![1, 2]);
 }
 
@@ -3359,13 +3359,13 @@ fn spatial_index_knn_nearest_n_geodesic() {
     assert_eq!(indexed.len(), 3);
     assert_eq!(indexed, non_indexed, "indexed geodesic KNN must match non-indexed");
 
-    // Paris→self=0, Paris→London≈344km, Paris→Berlin≈878km
+    // Paris->self=0, Paris->Londonapproximately 344km, Paris->Berlinapproximately 878km
     assert_eq!(indexed[0], 2, "Paris should be nearest to itself");
     assert_eq!(indexed[1], 1, "London should be second");
     assert_eq!(indexed[2], 3, "Berlin should be third");
 }
 
-// ── Index speed tests ────────────────────────────────────────────────────────
+// -- Index speed tests --------------------------------------------------------
 
 #[cfg(not(target_arch = "wasm32"))]
 fn elapsed_since_utc(start: chrono::DateTime<chrono::Utc>) -> std::time::Duration {
@@ -3381,7 +3381,7 @@ fn spatial_index_accelerates_intersects_window() {
     let db = ActiveTestDb::open();
     db.exec("CREATE TABLE sw_grid (id INTEGER PRIMARY KEY, geom BLOB)");
 
-    // 10 000 points in a 100×100 grid
+    // 10 000 points in a 100x100 grid
     db.exec("BEGIN");
     for x in 0..100 {
         for y in 0..100 {
@@ -3428,7 +3428,7 @@ fn spatial_index_accelerates_intersects_window() {
     let idx_count = db.query_all_i64(indexed_sql).len();
     let full_count = db.query_all_i64(full_scan_sql).len();
     assert_eq!(idx_count, full_count);
-    assert_eq!(idx_count, 121); // 11×11 points in [10,20]
+    assert_eq!(idx_count, 121); // 11x11 points in [10,20]
 
     eprintln!("intersects_window 10K: indexed={indexed_best:?}  full_scan={full_best:?}  speedup={:.1}x", full_best.as_nanos() as f64 / indexed_best.as_nanos() as f64);
     assert!(
@@ -3512,7 +3512,7 @@ fn type_partitioned_vs_mixed_index() {
     db.exec("CREATE TABLE mixed (id INTEGER PRIMARY KEY, geom BLOB)");
     db.exec("BEGIN");
     let mut id = 0i64;
-    // 7000 Points in a 100×70 grid
+    // 7000 Points in a 100x70 grid
     for x in 0..100 {
         for y in 0..70 {
             db.exec(&format!(
@@ -3595,7 +3595,7 @@ fn type_partitioned_vs_mixed_index() {
     let pts_only_count = db.query_all_i64(pts_only_sql).len();
     assert_eq!(mixed_pts_count, pts_only_count,
         "mixed type-filtered ({mixed_pts_count}) vs pts-only ({pts_only_count})");
-    assert_eq!(pts_only_count, 21 * 21); // points [40..60] × [40..60]
+    assert_eq!(pts_only_count, 21 * 21); // points [40..60] x [40..60]
 
     // Warmup
     let _ = db.query_all_i64(mixed_pts_sql);
@@ -3637,7 +3637,7 @@ fn type_partitioned_vs_mixed_index() {
     eprintln!("  overhead of mixed+filter vs pts-only: {:.1}x",
         mixed_best.as_nanos() as f64 / pts_only_best.as_nanos() as f64);
 
-    // ===== Benchmark 2: "Reverse geocode — find Polygon containing (25, 9)" =====
+    // ===== Benchmark 2: "Reverse geocode -- find Polygon containing (25, 9)" =====
     let mixed_poly_sql =
         "SELECT g.id FROM mixed g \
          JOIN mixed_geom_rtree r ON g.rowid = r.id \

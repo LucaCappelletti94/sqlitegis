@@ -23,7 +23,7 @@ name = "geolite_diesel"
 [dependencies]
 geolite-core = { version = "0.1.0", path = "../geolite-core" }
 geo           = { workspace = true }
-# Diesel base (no backend enabled) — backends are opt-in via features.
+# Diesel base (no backend enabled) -- backends are opt-in via features.
 diesel = { version = "2", default-features = false }
 
 [dev-dependencies]

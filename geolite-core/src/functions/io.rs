@@ -90,7 +90,7 @@ fn wkb_has_z_or_m(raw_type: u32) -> (bool, bool) {
     }
 }
 
-// ── Deserialization helpers ───────────────────────────────────────────────────
+// -- Deserialization helpers ---------------------------------------------------
 
 /// Parse WKT (optionally with an SRID) into an EWKB blob.
 ///
@@ -177,7 +177,7 @@ pub fn geom_from_geojson(json: &str, srid: Option<i32>) -> Result<Vec<u8>> {
     }
 }
 
-// ── Serialization helpers ─────────────────────────────────────────────────────
+// -- Serialization helpers -----------------------------------------------------
 
 /// Convert an EWKB blob to WKT text.
 ///

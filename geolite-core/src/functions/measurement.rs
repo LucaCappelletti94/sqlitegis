@@ -36,7 +36,7 @@ fn require_non_empty_point(point: Point<f64>, fn_name: &str) -> Result<Point<f64
     Ok(point)
 }
 
-/// ST_Area — planar area (square units of the CRS).
+/// ST_Area -- planar area (square units of the CRS).
 ///
 /// # Example
 ///
@@ -52,7 +52,7 @@ pub fn st_area(blob: &[u8]) -> Result<f64> {
     Ok(geom.unsigned_area())
 }
 
-/// ST_Length / ST_Length2D — planar arc length of a LineString or MultiLineString.
+/// ST_Length / ST_Length2D -- planar arc length of a LineString or MultiLineString.
 ///
 /// # Example
 ///
@@ -78,7 +78,7 @@ pub fn st_length(blob: &[u8]) -> Result<f64> {
     Ok(len)
 }
 
-/// ST_Perimeter — planar perimeter of a Polygon or MultiPolygon.
+/// ST_Perimeter -- planar perimeter of a Polygon or MultiPolygon.
 ///
 /// # Example
 ///
@@ -116,7 +116,7 @@ fn euclidean_geometry_distance(a: &Geometry<f64>, b: &Geometry<f64>) -> f64 {
     Euclidean.distance(a, b)
 }
 
-/// ST_Distance — minimum Euclidean distance between two geometries.
+/// ST_Distance -- minimum Euclidean distance between two geometries.
 ///
 /// # Example
 ///
@@ -135,7 +135,7 @@ pub fn st_distance(a: &[u8], b: &[u8]) -> Result<f64> {
     Ok(euclidean_geometry_distance(&ga, &gb))
 }
 
-/// ST_Centroid — geometric centroid of any geometry.
+/// ST_Centroid -- geometric centroid of any geometry.
 ///
 /// # Example
 ///
@@ -158,7 +158,7 @@ pub fn st_centroid(blob: &[u8]) -> Result<Vec<u8>> {
     write_ewkb(&Geometry::Point(c), srid)
 }
 
-/// ST_PointOnSurface — a point guaranteed to lie on the geometry.
+/// ST_PointOnSurface -- a point guaranteed to lie on the geometry.
 ///
 /// # Example
 ///
@@ -183,7 +183,7 @@ pub fn st_point_on_surface(blob: &[u8]) -> Result<Vec<u8>> {
     write_ewkb(&Geometry::Point(p), srid)
 }
 
-/// ST_HausdorffDistance — Hausdorff distance between two geometries.
+/// ST_HausdorffDistance -- Hausdorff distance between two geometries.
 ///
 /// # Example
 ///
@@ -202,9 +202,9 @@ pub fn st_hausdorff_distance(a: &[u8], b: &[u8]) -> Result<f64> {
     Ok(ga.hausdorff_distance(&gb))
 }
 
-// ── Bounding-box accessors ────────────────────────────────────────────────────
+// -- Bounding-box accessors ----------------------------------------------------
 
-/// ST_XMin — minimum X of the bounding rectangle.
+/// ST_XMin -- minimum X of the bounding rectangle.
 ///
 /// Returns `None` for empty geometries (PostGIS-compatible).
 ///
@@ -222,7 +222,7 @@ pub fn st_xmin(blob: &[u8]) -> Result<Option<f64>> {
     Ok(r.map(|r| r.min().x))
 }
 
-/// ST_XMax — maximum X of the bounding rectangle.
+/// ST_XMax -- maximum X of the bounding rectangle.
 ///
 /// Returns `None` for empty geometries (PostGIS-compatible).
 ///
@@ -240,7 +240,7 @@ pub fn st_xmax(blob: &[u8]) -> Result<Option<f64>> {
     Ok(r.map(|r| r.max().x))
 }
 
-/// ST_YMin — minimum Y of the bounding rectangle.
+/// ST_YMin -- minimum Y of the bounding rectangle.
 ///
 /// Returns `None` for empty geometries (PostGIS-compatible).
 ///
@@ -258,7 +258,7 @@ pub fn st_ymin(blob: &[u8]) -> Result<Option<f64>> {
     Ok(r.map(|r| r.min().y))
 }
 
-/// ST_YMax — maximum Y of the bounding rectangle.
+/// ST_YMax -- maximum Y of the bounding rectangle.
 ///
 /// Returns `None` for empty geometries (PostGIS-compatible).
 ///
@@ -289,7 +289,7 @@ fn bbox(blob: &[u8]) -> Result<Option<Rect<f64>>> {
         .map(Some)
 }
 
-// ── Spherical / geodetic variants ─────────────────────────────────────────────
+// -- Spherical / geodetic variants ---------------------------------------------
 
 fn require_point(g: Geometry<f64>) -> Result<Point<f64>> {
     match g {
@@ -336,7 +336,7 @@ fn parse_two_geographic_points(
     Ok((pa, pb, srid))
 }
 
-/// ST_DistanceSphere — Haversine distance in metres (requires Point inputs, SRID 4326).
+/// ST_DistanceSphere -- Haversine distance in metres (requires Point inputs, SRID 4326).
 ///
 /// # Example
 ///
@@ -354,7 +354,7 @@ pub fn st_distance_sphere(a: &[u8], b: &[u8]) -> Result<f64> {
     Ok(Haversine.distance(pa, pb))
 }
 
-/// ST_DistanceSpheroid — Geodesic distance in metres (Karney algorithm, SRID 4326).
+/// ST_DistanceSpheroid -- Geodesic distance in metres (Karney algorithm, SRID 4326).
 ///
 /// # Example
 ///
@@ -372,7 +372,7 @@ pub fn st_distance_spheroid(a: &[u8], b: &[u8]) -> Result<f64> {
     Ok(Geodesic.distance(pa, pb))
 }
 
-/// ST_LengthSphere — Haversine arc length of a line in metres (SRID 4326).
+/// ST_LengthSphere -- Haversine arc length of a line in metres (SRID 4326).
 ///
 /// # Example
 ///
@@ -397,7 +397,7 @@ pub fn st_length_sphere(blob: &[u8]) -> Result<f64> {
     }
 }
 
-/// ST_Azimuth — bearing from origin to target in radians (0 = north, clockwise, SRID 4326).
+/// ST_Azimuth -- bearing from origin to target in radians (0 = north, clockwise, SRID 4326).
 ///
 /// # Example
 ///
@@ -408,7 +408,7 @@ pub fn st_length_sphere(blob: &[u8]) -> Result<f64> {
 /// let origin = st_point(0.0, 0.0, Some(4326)).unwrap();
 /// let target = st_point(0.0, 1.0, Some(4326)).unwrap();
 /// let az = st_azimuth(&origin, &target).unwrap();
-/// // Due north → azimuth ≈ 0
+/// // Due north -> azimuth approximately  0
 /// assert!(az.abs() < 0.01);
 /// ```
 pub fn st_azimuth(origin: &[u8], target: &[u8]) -> Result<f64> {
@@ -416,7 +416,7 @@ pub fn st_azimuth(origin: &[u8], target: &[u8]) -> Result<f64> {
     Ok(Geodesic.bearing(po, pt).to_radians())
 }
 
-/// ST_Project — destination point given a start, bearing (radians), and distance (metres, SRID 4326).
+/// ST_Project -- destination point given a start, bearing (radians), and distance (metres, SRID 4326).
 ///
 /// # Example
 ///
@@ -449,7 +449,7 @@ pub fn st_project(origin: &[u8], distance: f64, azimuth: f64) -> Result<Vec<u8>>
     write_ewkb(&Geometry::Point(dest), srid)
 }
 
-/// ST_ClosestPoint — the point on geometry A closest to geometry B (point).
+/// ST_ClosestPoint -- the point on geometry A closest to geometry B (point).
 ///
 /// # Example
 ///
@@ -488,7 +488,7 @@ mod tests {
     use crate::functions::constructors::st_point;
     use crate::functions::io::geom_from_text;
 
-    // ── Wrong-type errors ──────────────────────────────────────────
+    // -- Wrong-type errors ------------------------------------------
 
     #[test]
     fn st_length_wrong_type() {
@@ -535,7 +535,7 @@ mod tests {
         assert!(st_length_sphere(&pt).is_err());
     }
 
-    // ── Distance to self ───────────────────────────────────────────
+    // -- Distance to self -------------------------------------------
 
     #[test]
     fn distance_to_self_is_zero() {
@@ -648,7 +648,7 @@ mod tests {
         assert!(st_distance_spheroid(&pt, &pt).unwrap().abs() < 1e-10);
     }
 
-    // ── Hausdorff ──────────────────────────────────────────────────
+    // -- Hausdorff --------------------------------------------------
 
     #[test]
     fn hausdorff_identical_is_zero() {
@@ -664,7 +664,7 @@ mod tests {
         assert!(format!("{err}").contains("does not accept empty geometries"));
     }
 
-    // ── Closest point ──────────────────────────────────────────────
+    // -- Closest point ----------------------------------------------
 
     #[test]
     fn closest_point_perpendicular_projection() {
@@ -675,7 +675,7 @@ mod tests {
         assert!((st_y(&cp).unwrap().unwrap() - 0.0).abs() < 1e-10);
     }
 
-    // ── Bounding box ───────────────────────────────────────────────
+    // -- Bounding box -----------------------------------------------
 
     #[test]
     fn bbox_invariants() {

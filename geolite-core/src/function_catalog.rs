@@ -42,7 +42,7 @@ pub struct SqliteFunctionSpec {
     /// Explicit Rust `*_xfunc` symbol to bind for this `(name, n_arg)`. `None`
     /// means the SQLite callback generator derives the symbol from `name`
     /// (lowercased, with an arity suffix when the same SQL name is overloaded).
-    /// Used for aliases like `ST_MakePoint → st_point_2_xfunc`.
+    /// Used for aliases like `ST_MakePoint -> st_point_2_xfunc`.
     pub xfunc_override: Option<&'static str>,
 }
 

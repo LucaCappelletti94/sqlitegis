@@ -278,7 +278,7 @@ macro_rules! assert_geom_double_double_cases {
     };
 }
 
-// ── I/O ─────────────────────────────────────────────────────────────────────
+// -- I/O ---------------------------------------------------------------------
 
 assert_unary_cases!(
     method_st_astext => st_astext,
@@ -288,7 +288,7 @@ assert_unary_cases!(
     method_st_asgeojson => st_asgeojson,
 );
 
-// ── Constructors / transforms ───────────────────────────────────────────────
+// -- Constructors / transforms -----------------------------------------------
 
 assert_unary_cases!(method_st_makepolygon => st_makepolygon,);
 assert_geom_geom_cases!(
@@ -297,7 +297,7 @@ assert_geom_geom_cases!(
 );
 assert_geom_double_cases!(method_st_buffer => st_buffer,);
 
-// ── Accessors ────────────────────────────────────────────────────────────────
+// -- Accessors ----------------------------------------------------------------
 
 assert_unary_cases!(
     method_st_srid => st_srid,
@@ -335,7 +335,7 @@ assert_geom_int_cases!(
     method_st_geometryn => st_geometryn,
 );
 
-// ── Measurement ──────────────────────────────────────────────────────────────
+// -- Measurement --------------------------------------------------------------
 
 assert_unary_cases!(
     method_st_area => st_area,
@@ -353,7 +353,7 @@ assert_geom_geom_cases!(
     method_st_hausdorffdistance => st_hausdorffdistance,
 );
 
-// ── Operations ───────────────────────────────────────────────────────────────
+// -- Operations ---------------------------------------------------------------
 
 assert_geom_geom_cases!(
     method_st_union => st_union,
@@ -362,7 +362,7 @@ assert_geom_geom_cases!(
     method_st_symdifference => st_symdifference,
 );
 
-// ── Predicates ───────────────────────────────────────────────────────────────
+// -- Predicates ---------------------------------------------------------------
 
 assert_geom_geom_cases!(
     method_st_intersects => st_intersects,
@@ -388,7 +388,7 @@ assert_geom_geom_double_cases!(
 );
 assert_geom_geom_text_cases!(method_st_relate_match_geoms => st_relate_match_geoms,);
 
-// ── Geography variants ───────────────────────────────────────────────────────
+// -- Geography variants -------------------------------------------------------
 
 assert_unary_cases!(method_st_lengthsphere => st_lengthsphere,);
 assert_geom_double_double_cases!(method_st_project => st_project,);

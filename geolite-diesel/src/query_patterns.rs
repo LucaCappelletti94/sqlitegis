@@ -1,6 +1,6 @@
 //! # Index-Aware Spatial Query Patterns
 //!
-//! SQLite R-tree indexes require **explicit JOINs** — unlike PostGIS where GiST
+//! SQLite R-tree indexes require **explicit JOINs** -- unlike PostGIS where GiST
 //! indexes are used transparently by the query planner. This module documents
 //! copy-pasteable SQL templates and [`diesel::sql_query`] examples for every
 //! common spatial query pattern.
@@ -24,14 +24,14 @@
 //!
 //! Every spatial query follows a **two-stage** pattern:
 //!
-//! 1. **PREFILTER** — JOIN against the R-tree to narrow candidates using
+//! 1. **PREFILTER** -- JOIN against the R-tree to narrow candidates using
 //!    bounding-box overlap. This is O(log N).
-//! 2. **REFINEMENT** — apply the exact spatial predicate (e.g., `ST_Intersects`)
+//! 2. **REFINEMENT** -- apply the exact spatial predicate (e.g., `ST_Intersects`)
 //!    on the remaining candidates.
 //!
 //! ## R-tree Float Precision
 //!
-//! The R-tree stores coordinates as **32-bit floats** (≈7 significant digits).
+//! The R-tree stores coordinates as **32-bit floats** (approximately 7 significant digits).
 //! For most use cases this is fine, but be aware that very small geometries or
 //! coordinates far from the origin may lose sub-metre precision in the
 //! prefilter. The refinement step always uses full 64-bit EWKB coordinates.
@@ -153,7 +153,7 @@
 //! ### Notes
 //!
 //! - `ST_Within(A, B)` returns true when A is completely inside B (boundary
-//!   touching counts as NOT within in the strict DE-9IM sense — use
+//!   touching counts as NOT within in the strict DE-9IM sense -- use
 //!   `ST_CoveredBy` if you want boundary-inclusive semantics).
 //! - The prefilter envelope should be the **search polygon's** bounding box,
 //!   not the candidate's.
@@ -217,7 +217,7 @@
 //! ### Notes
 //!
 //! - The R-tree prefilter checks that the point falls inside each candidate's
-//!   bounding box — this is a very tight filter for convex polygons.
+//!   bounding box -- this is a very tight filter for convex polygons.
 //! - For multipolygons or concave shapes, the refinement step eliminates
 //!   false positives from bbox-only matching.
 //!
@@ -301,8 +301,8 @@
 //!
 //! - Use `ST_DWithinSpheroid` instead of `ST_DWithinSphere` for higher
 //!   accuracy (Karney algorithm on WGS84 ellipsoid vs. Haversine on sphere).
-//! - The `dlon` formula diverges near the poles (`cos(lat) → 0`). For polar
-//!   queries, clamp `dlon` to 360° or use a full-scan fallback.
+//! - The `dlon` formula diverges near the poles (`cos(lat) -> 0`). For polar
+//!   queries, clamp `dlon` to 360 deg or use a full-scan fallback.
 //! - All geometries must have SRID 4326 for the geodesic functions.
 //!
 //! ---
@@ -383,7 +383,7 @@
 //!
 //! ### Notes
 //!
-//! - If fewer than N results are returned, the search box was too small —
+//! - If fewer than N results are returned, the search box was too small --
 //!   see [Pattern 7: Iterative KNN Widening](#pattern-7-iterative-knn-widening).
 //! - The initial `half_w` should be chosen based on data density. For a
 //!   uniform 1-unit grid, `half_w = sqrt(N)` is a reasonable starting point.
@@ -463,7 +463,7 @@
 //!
 //! - Use `ST_DistanceSpheroid` for ellipsoidal accuracy instead of
 //!   `ST_DistanceSphere` (Haversine).
-//! - The degree-offset bbox is intentionally conservative — it may include
+//! - The degree-offset bbox is intentionally conservative -- it may include
 //!   candidates outside the true geodesic circle, but the `ORDER BY`
 //!   ensures correct ranking.
 //!
@@ -474,7 +474,7 @@
 //! **Use case:** KNN search in sparse or unevenly distributed data where the
 //! initial search box may not contain enough results.
 //!
-//! This is an **application-level** retry pattern — no SQL changes needed.
+//! This is an **application-level** retry pattern -- no SQL changes needed.
 //!
 //! ### Algorithm
 //!
@@ -529,7 +529,7 @@
 //!
 //! This is a current geolite subset, not full PostGIS parity. PostGIS docs
 //! describe broader non-Point support for `ST_DistanceSphere` and
-//! `ST_DistanceSpheroid`; geolite is currently narrower. The underlying
+//! `ST_DistanceSpheroid`. geolite is currently narrower. The underlying
 //! `geo` crate (v0.32) only implements `Distance<Point, Point>` for its
 //! `Haversine` and `Geodesic` metric spaces (unlike Euclidean, which
 //! supports all geometry combinations).
@@ -542,13 +542,13 @@
 //! - **Point extraction**: use `ST_Centroid` or `ST_PointOnSurface` to
 //!   reduce a polygon/linestring to a representative point, then use
 //!   geodesic distance on that point.
-//! - **Vertex-pair approximation**: for LineString↔Point geodesic distance,
+//! - **Vertex-pair approximation**: for LineString<->Point geodesic distance,
 //!   compute `ST_DistanceSphere` for each vertex and take the minimum.
 //!   This is an approximation (misses points between vertices).
 //!
 //! ### Future Direction
 //!
-//! Geometry↔geometry geodesic distance would require either upstream
+//! Geometry<->geometry geodesic distance would require either upstream
 //! support in the `geo` crate (Haversine/Geodesic `Distance` impls for
 //! `LineString`, `Polygon`, etc.) or a custom implementation that
 //! iterates vertex pairs. This is deferred until either the `geo` crate
@@ -560,34 +560,34 @@
 //! ## Type-Aware Index Strategy: Research Findings
 //!
 //! **Question:** Does separating geometries by type (Point vs. LineString
-//! vs. Polygon) into distinct tables — each with its own R-tree — improve
+//! vs. Polygon) into distinct tables -- each with its own R-tree -- improve
 //! query performance compared to a single mixed-type table with one R-tree?
 //!
 //! ### Benchmark Setup
 //!
-//! - **Mixed table:** 10,000 rows — 7,000 Points + 2,000 LineStrings +
+//! - **Mixed table:** 10,000 rows -- 7,000 Points + 2,000 LineStrings +
 //!   1,000 Polygons, all with spatial index.
 //! - **Homogeneous tables:** 7,000 Points (separate table + index) and
 //!   1,000 Polygons (separate table + index).
 //! - **Queries tested:**
-//!   1. "Find all Points in window \[40,40\]–\[60,60\]" (intersects window)
+//!   1. "Find all Points in window \[40,40\]-\[60,60\]" (intersects window)
 //!   2. "Find Polygon containing point (25, 9)" (reverse geocoding)
 //!
 //! ### Results (release mode, best-of-20 runs)
 //!
 //! | Scenario | Homogeneous | Mixed + type filter | Mixed, no filter |
 //! |----------|-------------|---------------------|------------------|
-//! | Points in window | 360 µs | 495 µs | 457 µs |
-//! | Reverse geocode | 11 µs | 15 µs | 13 µs |
+//! | Points in window | 360 us | 495 us | 457 us |
+//! | Reverse geocode | 11 us | 15 us | 13 us |
 //!
 //! ### Conclusions
 //!
-//! 1. **Overhead is only 1.3–1.4×** — mostly due to the R-tree being
+//! 1. **Overhead is only 1.3-1.4x** -- mostly due to the R-tree being
 //!    larger (10K vs. 7K/1K entries), not type mismatch.
-//! 2. **Adding `ST_GeometryType()` filter is counterproductive** — the
+//! 2. **Adding `ST_GeometryType()` filter is counterproductive** -- the
 //!    type-check cost exceeds the savings from skipping predicates on
 //!    wrong-type geometries.
-//! 3. **The R-tree prefilter is highly selective** — after bbox narrowing,
+//! 3. **The R-tree prefilter is highly selective** -- after bbox narrowing,
 //!    only a small number of candidates reach the refinement step. Running
 //!    `ST_Contains` or `ST_Intersects` on a few extra non-matching
 //!    geometries is negligible.

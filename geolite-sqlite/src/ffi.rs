@@ -19,7 +19,7 @@ use geolite_core::functions::measurement::*;
 use geolite_core::functions::operations::*;
 use geolite_core::functions::predicates::*;
 
-// ── Constants ────────────────────────────────────────────────────────────────
+// -- Constants ----------------------------------------------------------------
 
 const DET: c_int = SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS;
 
@@ -28,7 +28,7 @@ const DET: c_int = SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS;
 const SQLITE_DIRECTONLY_FLAG: c_int = 0x0008_0000;
 const DIRECT: c_int = SQLITE_UTF8 | SQLITE_DIRECTONLY_FLAG;
 
-// ── Argument-extraction helpers ──────────────────────────────────────────────
+// -- Argument-extraction helpers ----------------------------------------------
 
 unsafe fn get_blob<'a>(argv: *mut *mut sqlite3_value, i: usize) -> Option<&'a [u8]> {
     let v = *argv.add(i);
@@ -105,7 +105,7 @@ unsafe fn get_i32_arg(argv: *mut *mut sqlite3_value, i: usize) -> SqlI32Arg {
     }
 }
 
-// ── Result-setting helpers ───────────────────────────────────────────────────
+// -- Result-setting helpers ---------------------------------------------------
 
 fn checked_c_int_len(len: usize) -> Option<c_int> {
     c_int::try_from(len).ok()
@@ -258,7 +258,7 @@ unsafe fn optional_srid_arg(
     }
 }
 
-// ── Convenience setter wrappers ──────────────────────────────────────────────
+// -- Convenience setter wrappers ----------------------------------------------
 
 unsafe fn set_bool(ctx: *mut sqlite3_context, v: bool) {
     set_i32(ctx, v as i32);
@@ -270,13 +270,13 @@ unsafe fn set_text_owned(ctx: *mut sqlite3_context, v: impl AsRef<str>) {
     set_text(ctx, v.as_ref());
 }
 
-// ── Callback macros ──────────────────────────────────────────────────────────
+// -- Callback macros ----------------------------------------------------------
 //
 // Each macro generates an `unsafe extern "C" fn` with the standard SQLite
 // scalar-function signature. NULL blob/text inputs produce NULL output
 // (PostGIS-compatible). Errors produce sqlite3_result_error.
 
-/// 1 blob → Result<T>, with a custom setter expression.
+/// 1 blob -> Result<T>, with a custom setter expression.
 macro_rules! xfunc_blob {
     ($name:ident, $label:expr, $func:expr, $set:expr) => {
         unsafe extern "C" fn $name(
@@ -298,7 +298,7 @@ macro_rules! xfunc_blob {
     };
 }
 
-/// 2 blobs → Result<T>, with a custom setter expression.
+/// 2 blobs -> Result<T>, with a custom setter expression.
 macro_rules! xfunc_blob2 {
     ($name:ident, $label:expr, $func:expr, $set:expr) => {
         unsafe extern "C" fn $name(
@@ -324,7 +324,7 @@ macro_rules! xfunc_blob2 {
     };
 }
 
-/// 1 blob → Result<Option<f64>>, where `None` maps to SQL NULL.
+/// 1 blob -> Result<Option<f64>>, where `None` maps to SQL NULL.
 macro_rules! xfunc_blob_opt_f64 {
     ($name:ident, $label:expr, $func:expr) => {
         unsafe extern "C" fn $name(
@@ -347,7 +347,7 @@ macro_rules! xfunc_blob_opt_f64 {
     };
 }
 
-/// blob + integer arg → Result<Vec<u8>>.
+/// blob + integer arg -> Result<Vec<u8>>.
 macro_rules! xfunc_blob_i32_blob {
     ($name:ident, $label:expr, $arg_name:expr, $func:expr) => {
         unsafe extern "C" fn $name(
@@ -372,7 +372,7 @@ macro_rules! xfunc_blob_i32_blob {
     };
 }
 
-/// blob + numeric arg → Result<Vec<u8>>.
+/// blob + numeric arg -> Result<Vec<u8>>.
 macro_rules! xfunc_blob_f64_blob {
     ($name:ident, $label:expr, $arg_name:expr, $func:expr) => {
         unsafe extern "C" fn $name(
@@ -397,7 +397,7 @@ macro_rules! xfunc_blob_f64_blob {
     };
 }
 
-/// blob + numeric arg + numeric arg → Result<Vec<u8>>.
+/// blob + numeric arg + numeric arg -> Result<Vec<u8>>.
 macro_rules! xfunc_blob_f64_f64_blob {
     ($name:ident, $label:expr, $arg1_name:expr, $arg2_name:expr, $func:expr) => {
         unsafe extern "C" fn $name(
@@ -425,7 +425,7 @@ macro_rules! xfunc_blob_f64_f64_blob {
     };
 }
 
-/// 2 blobs + numeric arg → Result<bool>.
+/// 2 blobs + numeric arg -> Result<bool>.
 macro_rules! xfunc_blob2_f64_bool {
     ($name:ident, $label:expr, $arg_name:expr, $func:expr) => {
         unsafe extern "C" fn $name(
@@ -454,7 +454,7 @@ macro_rules! xfunc_blob2_f64_bool {
     };
 }
 
-/// 2 blobs + text arg → Result<bool>.
+/// 2 blobs + text arg -> Result<bool>.
 macro_rules! xfunc_blob2_text_bool {
     ($name:ident, $label:expr, $arg_name:expr, $func:expr) => {
         unsafe extern "C" fn $name(
@@ -483,7 +483,7 @@ macro_rules! xfunc_blob2_text_bool {
     };
 }
 
-/// 2 text args → Result<bool>.
+/// 2 text args -> Result<bool>.
 macro_rules! xfunc_text2_bool {
     ($name:ident, $label:expr, $arg1_name:expr, $arg2_name:expr, $func:expr) => {
         unsafe extern "C" fn $name(
@@ -507,9 +507,9 @@ macro_rules! xfunc_text2_bool {
     };
 }
 
-// ── I/O callbacks ────────────────────────────────────────────────────────────
+// -- I/O callbacks ------------------------------------------------------------
 
-/// text + optional SRID → blob
+/// text + optional SRID -> blob
 macro_rules! xfunc_text_optsrid_blob {
     ($name1:ident, $name2:ident, $label:expr, $func:expr) => {
         unsafe extern "C" fn $name1(
@@ -548,7 +548,7 @@ macro_rules! xfunc_text_optsrid_blob {
     };
 }
 
-/// blob + optional SRID → blob
+/// blob + optional SRID -> blob
 macro_rules! xfunc_blob_optsrid_blob {
     ($name1:ident, $name2:ident, $label:expr, $func:expr) => {
         unsafe extern "C" fn $name1(
@@ -635,7 +635,7 @@ xfunc_blob!(
     set_text_owned
 );
 
-// ── Constructor callbacks ────────────────────────────────────────────────────
+// -- Constructor callbacks ----------------------------------------------------
 
 unsafe fn st_point_impl(ctx: *mut sqlite3_context, argv: *mut *mut sqlite3_value, with_srid: bool) {
     let arg_count = if with_srid { 3 } else { 2 };
@@ -787,7 +787,7 @@ unsafe extern "C" fn st_tileenvelope_xfunc(
     });
 }
 
-// ── Accessor callbacks ───────────────────────────────────────────────────────
+// -- Accessor callbacks -------------------------------------------------------
 
 xfunc_blob!(st_srid_xfunc, "ST_SRID", st_srid, set_i32);
 
@@ -886,7 +886,7 @@ xfunc_blob!(
     set_text_owned
 );
 
-// ── Measurement callbacks ────────────────────────────────────────────────────
+// -- Measurement callbacks ----------------------------------------------------
 
 xfunc_blob!(st_area_xfunc, "ST_Area", st_area, set_f64);
 xfunc_blob!(st_length_xfunc, "ST_Length", st_length, set_f64);
@@ -949,7 +949,7 @@ xfunc_blob2!(
     set_blob_owned
 );
 
-// ── Operation callbacks ──────────────────────────────────────────────────────
+// -- Operation callbacks ------------------------------------------------------
 
 xfunc_blob2!(st_union_xfunc, "ST_Union", st_union, set_blob_owned);
 xfunc_blob2!(
@@ -973,7 +973,7 @@ xfunc_blob2!(
 
 xfunc_blob_f64_blob!(st_buffer_xfunc, "ST_Buffer", "distance", st_buffer);
 
-// ── Predicate callbacks ──────────────────────────────────────────────────────
+// -- Predicate callbacks ------------------------------------------------------
 
 xfunc_blob2!(
     st_intersects_xfunc,
@@ -1022,7 +1022,7 @@ xfunc_text2_bool!(
     st_relate_match
 );
 
-// ── Spatial index helpers ─────────────────────────────────────────────────────
+// -- Spatial index helpers -----------------------------------------------------
 
 fn validate_identifier(s: &str) -> Option<&str> {
     if s.is_empty() {
@@ -1504,7 +1504,7 @@ unsafe fn ensure_spatial_index_objects_owned_by_table(
     Some(SpatialIndexOwnership::Absent)
 }
 
-// ── Spatial index callbacks ──────────────────────────────────────────────────
+// -- Spatial index callbacks --------------------------------------------------
 
 /// Extract and validate `(table, column)` identifiers from the first two args.
 /// On failure, sets an error on `ctx` and returns `None`.
@@ -1766,7 +1766,7 @@ unsafe extern "C" fn drop_spatial_index_xfunc(
     });
 }
 
-// ── Registration ─────────────────────────────────────────────────────────────
+// -- Registration -------------------------------------------------------------
 
 type XFunc = unsafe extern "C" fn(*mut sqlite3_context, c_int, *mut *mut sqlite3_value);
 
@@ -1881,7 +1881,7 @@ pub unsafe fn register_functions(db: *mut sqlite3) -> c_int {
     SQLITE_OK
 }
 
-// ── C entry point for loadable extension (native only) ───────────────────────
+// -- C entry point for loadable extension (native only) -----------------------
 
 /// `sqlite3_geolite_init` is the entry point called by SQLite when loading
 /// this library as a loadable extension (`.load_extension('geolite')`).

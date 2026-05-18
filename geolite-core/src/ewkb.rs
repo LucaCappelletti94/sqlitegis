@@ -1,14 +1,14 @@
 //! EWKB (Extended Well-Known Binary) parser and writer.
 //!
 //! Wire format:
-//!   [0x01|0x00]   — byte order marker (little-endian or big-endian)
-//!   [u32]         — geometry type with flags (in the declared byte order)
+//!   [0x01|0x00]   -- byte order marker (little-endian or big-endian)
+//!   [u32]         -- geometry type with flags (in the declared byte order)
 //!                   Bit 29 (0x20000000): SRID present
 //!                   Bit 31 (0x80000000): Z dimension
 //!                   Bit 30 (0x40000000): M dimension
-//!                   Bits 0–28: geometry type (1=Point, 2=LineString, …)
-//!   [i32]         — SRID (only when SRID flag set, in declared byte order)
-//!   …             — ISO WKB geometry payload
+//!                   Bits 0-28: geometry type (1=Point, 2=LineString, ...)
+//!   [i32]         -- SRID (only when SRID flag set, in declared byte order)
+//!   ...             -- ISO WKB geometry payload
 
 use geo::{Geometry, Point};
 use geozero::wkb::Ewkb;
@@ -16,12 +16,12 @@ use geozero::{CoordDimensions, ToGeo, ToWkb};
 
 use crate::error::{GeoLiteError, Result};
 
-// ── EWKB flag constants ───────────────────────────────────────────────────────
+// -- EWKB flag constants -------------------------------------------------------
 pub const EWKB_SRID_FLAG: u32 = 0x20000000;
 pub const EWKB_Z_FLAG: u32 = 0x80000000;
 pub const EWKB_M_FLAG: u32 = 0x40000000;
 
-// ── Geometry type codes (ISO WKB) ─────────────────────────────────────────────
+// -- Geometry type codes (ISO WKB) ---------------------------------------------
 pub const WKB_POINT: u32 = 1;
 pub const WKB_LINESTRING: u32 = 2;
 pub const WKB_POLYGON: u32 = 3;
@@ -291,8 +291,8 @@ fn patch_wkb_with_srid(iso_wkb: &[u8], srid_val: i32) -> Result<Vec<u8>> {
     };
     let ewkb_type = raw_type | EWKB_SRID_FLAG;
 
-    // ISO WKB: [byte_order(1)][type_u32(4)][payload…]
-    // EWKB:    [byte_order(1)][type_u32_with_flag(4)][srid_i32(4)][payload…]
+    // ISO WKB: [byte_order(1)][type_u32(4)][payload...]
+    // EWKB:    [byte_order(1)][type_u32_with_flag(4)][srid_i32(4)][payload...]
     let mut out = Vec::with_capacity(iso_wkb.len() + 4);
     out.push(iso_wkb[0]);
     if little_endian {

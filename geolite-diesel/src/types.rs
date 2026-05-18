@@ -4,7 +4,7 @@
 //! to PostGIS's native `geometry` / `geography` types in PostgreSQL,
 //! storing EWKB-encoded geometry.
 
-// ── SQL types ─────────────────────────────────────────────────────────────────
+// -- SQL types -----------------------------------------------------------------
 
 /// Diesel SQL type for a geometry column (stored as EWKB BLOB).
 ///
@@ -71,7 +71,7 @@ fn parse_geography_blob(blob: &[u8]) -> std::result::Result<geo::Geometry<f64>, 
     parse_blob_with_srid_constraint(blob, Some(4326))
 }
 
-// ── SQLite FromSql / ToSql ────────────────────────────────────────────────────
+// -- SQLite FromSql / ToSql ----------------------------------------------------
 
 #[cfg(feature = "sqlite")]
 mod sqlite_impls {
@@ -155,7 +155,7 @@ mod sqlite_impls {
     }
 }
 
-// ── PostgreSQL FromSql / ToSql ────────────────────────────────────────────────
+// -- PostgreSQL FromSql / ToSql ------------------------------------------------
 
 #[cfg(feature = "postgres")]
 mod postgres_impls {

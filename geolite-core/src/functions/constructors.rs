@@ -8,7 +8,7 @@ use geo::{Coord, Geometry, LineString, Point, Polygon, Rect};
 use crate::error::{GeoLiteError, Result};
 use crate::ewkb::{geometry_type_name, parse_ewkb, parse_ewkb_pair, write_ewkb};
 
-/// ST_Point / ST_MakePoint (2D) — construct a Point geometry.
+/// ST_Point / ST_MakePoint (2D) -- construct a Point geometry.
 ///
 /// # Example
 ///
@@ -30,7 +30,7 @@ pub fn st_point(x: f64, y: f64, srid: Option<i32>) -> Result<Vec<u8>> {
     write_ewkb(&Geometry::Point(Point::new(x, y)), srid)
 }
 
-/// ST_MakeLine — build a LineString from two point geometries.
+/// ST_MakeLine -- build a LineString from two point geometries.
 ///
 /// # Example
 ///
@@ -81,7 +81,7 @@ pub fn st_make_line(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
     write_ewkb(&Geometry::LineString(ls), srid)
 }
 
-/// ST_MakePolygon — construct a Polygon from a closed shell LineString.
+/// ST_MakePolygon -- construct a Polygon from a closed shell LineString.
 ///
 /// # Example
 ///
@@ -121,7 +121,7 @@ pub fn st_make_polygon(shell: &[u8]) -> Result<Vec<u8>> {
     write_ewkb(&Geometry::Polygon(poly), srid)
 }
 
-/// ST_MakeEnvelope — build a rectangular Polygon from four corner coordinates.
+/// ST_MakeEnvelope -- build a rectangular Polygon from four corner coordinates.
 ///
 /// # Example
 ///
@@ -153,7 +153,7 @@ pub fn st_make_envelope(
     write_ewkb(&Geometry::Rect(rect), srid)
 }
 
-/// ST_Collect (scalar) — combine two geometries into a GeometryCollection.
+/// ST_Collect (scalar) -- combine two geometries into a GeometryCollection.
 ///
 /// # Example
 ///
@@ -176,7 +176,7 @@ pub fn st_collect(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
 /// Half the Web Mercator circumference in metres (EPSG:3857).
 const WEB_MERCATOR_HALF_SIZE: f64 = 20037508.3427892;
 
-/// ST_TileEnvelope — Web Mercator tile bounding box (EPSG:3857).
+/// ST_TileEnvelope -- Web Mercator tile bounding box (EPSG:3857).
 /// Returns a Polygon in EPSG:3857 coordinates.
 ///
 /// # Example
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn st_make_envelope_degenerate_accepts_equal_coords() {
-        // A degenerate envelope (line or point) is valid — xmin==xmax is allowed
+        // A degenerate envelope (line or point) is valid -- xmin==xmax is allowed
         assert!(st_make_envelope(1.0, 1.0, 1.0, 2.0, None).is_ok());
         assert!(st_make_envelope(0.0, 0.0, 0.0, 0.0, None).is_ok());
     }

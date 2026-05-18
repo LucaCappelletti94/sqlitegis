@@ -76,11 +76,11 @@ assert!(sql.contains("st_dwithin"));
 # }
 ```
 
-`CreateSpatialIndex` and `DropSpatialIndex` are called via raw SQL (`diesel::sql_query`) — they're DDL helpers and don't have typed wrappers. Both lifecycle calls fail closed when the `geolite_spatial_index_catalog` ownership table is out of sync with live R-tree objects; prefer SQL migrations for setup/teardown. Indexed queries are roughly 50–60× faster than non-indexed in our benches — run `cargo bench -p geolite-diesel --features sqlite` to measure locally.
+`CreateSpatialIndex` and `DropSpatialIndex` are called via raw SQL (`diesel::sql_query`). They are DDL helpers and don't have typed wrappers. Both lifecycle calls fail closed when the `geolite_spatial_index_catalog` ownership table is out of sync with live R-tree objects. Prefer SQL migrations for setup and teardown. Indexed queries are roughly 50 to 60x faster than non-indexed in our benches. Run `cargo bench -p geolite-diesel --features sqlite` to measure locally.
 
 ## Geographic functions
 
-Geodesic and spherical functions (`ST_DistanceSphere`, `ST_DistanceSpheroid`, `ST_LengthSphere`, `ST_Azimuth`, `ST_Project`, `ST_DWithinSphere`, `ST_DWithinSpheroid`) require `SRID=4326` non-empty Point inputs; everything else is rejected with an explicit error. `ST_GeomFromGeoJSON` defaults to `SRID=4326` when none is given — wrap in `ST_SetSRID` to override. `ST_DWithin*` predicates require a finite, non-negative distance.
+Geodesic and spherical functions (`ST_DistanceSphere`, `ST_DistanceSpheroid`, `ST_LengthSphere`, `ST_Azimuth`, `ST_Project`, `ST_DWithinSphere`, `ST_DWithinSpheroid`) require `SRID=4326` non-empty Point inputs. Everything else is rejected with an explicit error. `ST_GeomFromGeoJSON` defaults to `SRID=4326` when none is given. Wrap in `ST_SetSRID` to override. `ST_DWithin*` predicates require a finite, non-negative distance.
 
 ## Documentation
 
@@ -100,8 +100,8 @@ Measured on March 5, 2026:
 
 | Scenario | Indexed (ORM + R-tree join) | Non-indexed (ORM) | Approx speedup |
 | --- | ---: | ---: | ---: |
-| `intersects_window` | `156.43 µs` | `9.3577 ms` | `~59.8x` |
-| `knn` | `84.271 µs` | `5.4050 ms` | `~64.1x` |
+| `intersects_window` | `156.43 us` | `9.3577 ms` | `~59.8x` |
+| `knn` | `84.271 us` | `5.4050 ms` | `~64.1x` |
 
 Values above are Criterion central estimates from one run and can vary by host and load.
 

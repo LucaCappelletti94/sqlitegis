@@ -13,7 +13,7 @@ use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
-// ── Auto-extension registration ──────────────────────────────────────────────
+// -- Auto-extension registration ----------------------------------------------
 
 static INIT: Once = Once::new();
 
@@ -33,7 +33,7 @@ fn conn() -> SqliteConnection {
     SqliteConnection::establish(":memory:").unwrap()
 }
 
-// ── Shared test definitions ──────────────────────────────────────────────────
+// -- Shared test definitions --------------------------------------------------
 
 include!("diesel_test_helpers.rs");
 define_diesel_sqlite_tests!(wasm_bindgen_test);
