@@ -1,0 +1,22 @@
+[application]
+name = "geolite-web-demo"
+default_platform = "web"
+
+[web.app]
+title = "geolite -- SQLite spatial queries in the browser"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src", "public"]
+
+[web.resource]
+
+[web.resource.dev]
+
+# wasm-opt was failing with "compile unit size was incorrect (this may be an
+# unsupported version of DWARF)" because binaryen does not handle the DWARF
+# version emitted by current rustc. Stripping debug info before optimisation
+# sidesteps the parse and lets the size pass run.
+[web.wasm_opt]
+debug = false
+level = "4"

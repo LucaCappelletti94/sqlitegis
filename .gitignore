@@ -24,3 +24,6 @@ target
 # Added by cargo
 
 /target
+
+# Playwright MCP cache (browser console logs from interactive verification)
+.playwright-mcp/
