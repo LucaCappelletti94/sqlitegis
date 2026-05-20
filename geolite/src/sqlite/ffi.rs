@@ -272,320 +272,243 @@ unsafe fn set_text_owned(ctx: *mut sqlite3_context, v: impl AsRef<str>) {
 
 // -- Callback macros ----------------------------------------------------------
 //
-// Each macro generates an `unsafe extern "C" fn` with the standard SQLite
-// scalar-function signature. NULL blob/text inputs produce NULL output
-// (PostGIS-compatible). Errors produce sqlite3_result_error.
+// Each xfunc_* macro below generates an `unsafe extern "C" fn` with the
+// standard SQLite scalar-function signature. NULL blob/text inputs produce
+// NULL output (PostGIS-compatible). Errors produce sqlite3_result_error.
+//
+// All eleven macros share two pieces of boilerplate that are factored out
+// into the two inner helpers below:
+//
+// - `xfunc_decl!` emits the extern "C" fn signature and wraps the body in
+//   the panic-catching `xfunc_guard`.
+// - `xfunc_dispatch!` matches a `Result<T, _>` and routes the Ok arm to a
+//   setter expression while the Err arm formats and calls `set_error`.
+
+/// Emit an `unsafe extern "C" fn $name` with the SQLite scalar signature,
+/// wrapping `$body` in `xfunc_guard`. `$ctx` and `$argv` are bound to the
+/// pointer parameters so the body can name them.
+macro_rules! xfunc_decl {
+    ($name:ident, $label:expr, $ctx:ident, $argv:ident, $body:block) => {
+        unsafe extern "C" fn $name(
+            $ctx: *mut sqlite3_context,
+            _n: c_int,
+            $argv: *mut *mut sqlite3_value,
+        ) {
+            xfunc_guard($ctx, $label, || $body);
+        }
+    };
+}
+
+/// Match a `Result<T, _>` from a callback: route `Ok(v)` to `$set(ctx, v)`
+/// and format `Err(e)` into a SQLite error message tagged with `$label`.
+macro_rules! xfunc_dispatch {
+    ($ctx:expr, $label:expr, $result:expr, $set:expr) => {
+        match $result {
+            Ok(v) => $set($ctx, v),
+            Err(e) => set_error($ctx, &format!(concat!($label, ": {}"), e)),
+        }
+    };
+}
 
 /// 1 blob -> Result<T>, with a custom setter expression.
 macro_rules! xfunc_blob {
     ($name:ident, $label:expr, $func:expr, $set:expr) => {
-        unsafe extern "C" fn $name(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(b) = get_blob(argv, 0) else {
-                    set_null(ctx);
-                    return;
-                };
-                match $func(b) {
-                    Ok(v) => $set(ctx, v),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name, $label, ctx, argv, {
+            let Some(b) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, $func(b), $set);
+        });
     };
 }
 
 /// 2 blobs -> Result<T>, with a custom setter expression.
 macro_rules! xfunc_blob2 {
     ($name:ident, $label:expr, $func:expr, $set:expr) => {
-        unsafe extern "C" fn $name(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(a) = get_blob(argv, 0) else {
-                    set_null(ctx);
-                    return;
-                };
-                let Some(b) = get_blob(argv, 1) else {
-                    set_null(ctx);
-                    return;
-                };
-                match $func(a, b) {
-                    Ok(v) => $set(ctx, v),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name, $label, ctx, argv, {
+            let Some(a) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            let Some(b) = get_blob(argv, 1) else {
+                set_null(ctx);
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, $func(a, b), $set);
+        });
     };
 }
 
 /// 1 blob -> Result<Option<f64>>, where `None` maps to SQL NULL.
+///
+/// Has its own three-arm match (`Ok(Some)` / `Ok(None)` / `Err`), so it
+/// uses `xfunc_decl!` for the signature but not `xfunc_dispatch!`.
 macro_rules! xfunc_blob_opt_f64 {
     ($name:ident, $label:expr, $func:expr) => {
-        unsafe extern "C" fn $name(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(blob) = get_blob(argv, 0) else {
-                    set_null(ctx);
-                    return;
-                };
-                match $func(blob) {
-                    Ok(Some(v)) => set_f64(ctx, v),
-                    Ok(None) => set_null(ctx),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name, $label, ctx, argv, {
+            let Some(blob) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            match $func(blob) {
+                Ok(Some(v)) => set_f64(ctx, v),
+                Ok(None) => set_null(ctx),
+                Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
+            }
+        });
     };
 }
 
 /// blob + integer arg -> Result<Vec<u8>>.
 macro_rules! xfunc_blob_i32_blob {
     ($name:ident, $label:expr, $arg_name:expr, $func:expr) => {
-        unsafe extern "C" fn $name(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(b) = get_blob(argv, 0) else {
-                    set_null(ctx);
-                    return;
-                };
-                let Some(n) = require_i32_arg(ctx, argv, 1, $label, $arg_name) else {
-                    return;
-                };
-                match ($func)(b, n) {
-                    Ok(v) => set_blob(ctx, &v),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name, $label, ctx, argv, {
+            let Some(b) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            let Some(n) = require_i32_arg(ctx, argv, 1, $label, $arg_name) else {
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, ($func)(b, n), set_blob_owned);
+        });
     };
 }
 
 /// blob + numeric arg -> Result<Vec<u8>>.
 macro_rules! xfunc_blob_f64_blob {
     ($name:ident, $label:expr, $arg_name:expr, $func:expr) => {
-        unsafe extern "C" fn $name(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(b) = get_blob(argv, 0) else {
-                    set_null(ctx);
-                    return;
-                };
-                let Some(v) = require_f64_arg(ctx, argv, 1, $label, $arg_name) else {
-                    return;
-                };
-                match ($func)(b, v) {
-                    Ok(out) => set_blob(ctx, &out),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name, $label, ctx, argv, {
+            let Some(b) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            let Some(v) = require_f64_arg(ctx, argv, 1, $label, $arg_name) else {
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, ($func)(b, v), set_blob_owned);
+        });
     };
 }
 
 /// blob + numeric arg + numeric arg -> Result<Vec<u8>>.
 macro_rules! xfunc_blob_f64_f64_blob {
     ($name:ident, $label:expr, $arg1_name:expr, $arg2_name:expr, $func:expr) => {
-        unsafe extern "C" fn $name(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(b) = get_blob(argv, 0) else {
-                    set_null(ctx);
-                    return;
-                };
-                let Some(v1) = require_f64_arg(ctx, argv, 1, $label, $arg1_name) else {
-                    return;
-                };
-                let Some(v2) = require_f64_arg(ctx, argv, 2, $label, $arg2_name) else {
-                    return;
-                };
-                match ($func)(b, v1, v2) {
-                    Ok(out) => set_blob(ctx, &out),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name, $label, ctx, argv, {
+            let Some(b) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            let Some(v1) = require_f64_arg(ctx, argv, 1, $label, $arg1_name) else {
+                return;
+            };
+            let Some(v2) = require_f64_arg(ctx, argv, 2, $label, $arg2_name) else {
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, ($func)(b, v1, v2), set_blob_owned);
+        });
     };
 }
 
 /// 2 blobs + numeric arg -> Result<bool>.
 macro_rules! xfunc_blob2_f64_bool {
     ($name:ident, $label:expr, $arg_name:expr, $func:expr) => {
-        unsafe extern "C" fn $name(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(a) = get_blob(argv, 0) else {
-                    set_null(ctx);
-                    return;
-                };
-                let Some(b) = get_blob(argv, 1) else {
-                    set_null(ctx);
-                    return;
-                };
-                let Some(v) = require_f64_arg(ctx, argv, 2, $label, $arg_name) else {
-                    return;
-                };
-                match ($func)(a, b, v) {
-                    Ok(out) => set_bool(ctx, out),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name, $label, ctx, argv, {
+            let Some(a) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            let Some(b) = get_blob(argv, 1) else {
+                set_null(ctx);
+                return;
+            };
+            let Some(v) = require_f64_arg(ctx, argv, 2, $label, $arg_name) else {
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, ($func)(a, b, v), set_bool);
+        });
     };
 }
 
 /// 2 blobs + text arg -> Result<bool>.
 macro_rules! xfunc_blob2_text_bool {
     ($name:ident, $label:expr, $arg_name:expr, $func:expr) => {
-        unsafe extern "C" fn $name(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(a) = get_blob(argv, 0) else {
-                    set_null(ctx);
-                    return;
-                };
-                let Some(b) = get_blob(argv, 1) else {
-                    set_null(ctx);
-                    return;
-                };
-                let Some(v) = require_text_arg(ctx, argv, 2, $label, $arg_name) else {
-                    return;
-                };
-                match ($func)(a, b, v) {
-                    Ok(out) => set_bool(ctx, out),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name, $label, ctx, argv, {
+            let Some(a) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            let Some(b) = get_blob(argv, 1) else {
+                set_null(ctx);
+                return;
+            };
+            let Some(v) = require_text_arg(ctx, argv, 2, $label, $arg_name) else {
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, ($func)(a, b, v), set_bool);
+        });
     };
 }
 
 /// 2 text args -> Result<bool>.
 macro_rules! xfunc_text2_bool {
     ($name:ident, $label:expr, $arg1_name:expr, $arg2_name:expr, $func:expr) => {
-        unsafe extern "C" fn $name(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(a) = require_text_arg(ctx, argv, 0, $label, $arg1_name) else {
-                    return;
-                };
-                let Some(b) = require_text_arg(ctx, argv, 1, $label, $arg2_name) else {
-                    return;
-                };
-                match ($func)(a, b) {
-                    Ok(out) => set_bool(ctx, out),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name, $label, ctx, argv, {
+            let Some(a) = require_text_arg(ctx, argv, 0, $label, $arg1_name) else {
+                return;
+            };
+            let Some(b) = require_text_arg(ctx, argv, 1, $label, $arg2_name) else {
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, ($func)(a, b), set_bool);
+        });
     };
 }
 
 // -- I/O callbacks ------------------------------------------------------------
 
-/// text + optional SRID -> blob
+/// text + optional SRID -> blob (generates two callbacks: 1-arg and 2-arg).
 macro_rules! xfunc_text_optsrid_blob {
     ($name1:ident, $name2:ident, $label:expr, $func:expr) => {
-        unsafe extern "C" fn $name1(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(t) = require_text_arg(ctx, argv, 0, $label, "wkt") else {
-                    return;
-                };
-                match $func(t, None) {
-                    Ok(v) => set_blob(ctx, &v),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
-        unsafe extern "C" fn $name2(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(t) = require_text_arg(ctx, argv, 0, $label, "wkt") else {
-                    return;
-                };
-                let Some(srid) = require_i32_arg(ctx, argv, 1, $label, "srid") else {
-                    return;
-                };
-                match $func(t, Some(srid)) {
-                    Ok(v) => set_blob(ctx, &v),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name1, $label, ctx, argv, {
+            let Some(t) = require_text_arg(ctx, argv, 0, $label, "wkt") else {
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, $func(t, None), set_blob_owned);
+        });
+        xfunc_decl!($name2, $label, ctx, argv, {
+            let Some(t) = require_text_arg(ctx, argv, 0, $label, "wkt") else {
+                return;
+            };
+            let Some(srid) = require_i32_arg(ctx, argv, 1, $label, "srid") else {
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, $func(t, Some(srid)), set_blob_owned);
+        });
     };
 }
 
-/// blob + optional SRID -> blob
+/// blob + optional SRID -> blob (generates two callbacks: 1-arg and 2-arg).
 macro_rules! xfunc_blob_optsrid_blob {
     ($name1:ident, $name2:ident, $label:expr, $func:expr) => {
-        unsafe extern "C" fn $name1(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(b) = get_blob(argv, 0) else {
-                    set_null(ctx);
-                    return;
-                };
-                match $func(b, None) {
-                    Ok(v) => set_blob(ctx, &v),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
-        unsafe extern "C" fn $name2(
-            ctx: *mut sqlite3_context,
-            _n: c_int,
-            argv: *mut *mut sqlite3_value,
-        ) {
-            xfunc_guard(ctx, $label, || {
-                let Some(b) = get_blob(argv, 0) else {
-                    set_null(ctx);
-                    return;
-                };
-                let Some(srid) = require_i32_arg(ctx, argv, 1, $label, "srid") else {
-                    return;
-                };
-                match $func(b, Some(srid)) {
-                    Ok(v) => set_blob(ctx, &v),
-                    Err(e) => set_error(ctx, &format!(concat!($label, ": {}"), e)),
-                }
-            });
-        }
+        xfunc_decl!($name1, $label, ctx, argv, {
+            let Some(b) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, $func(b, None), set_blob_owned);
+        });
+        xfunc_decl!($name2, $label, ctx, argv, {
+            let Some(b) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            let Some(srid) = require_i32_arg(ctx, argv, 1, $label, "srid") else {
+                return;
+            };
+            xfunc_dispatch!(ctx, $label, $func(b, Some(srid)), set_blob_owned);
+        });
     };
 }
 
