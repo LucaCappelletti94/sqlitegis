@@ -29,20 +29,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: geolite-sqlite intersects window perf
-        run: cargo test -p geolite-sqlite spatial_index_accelerates_intersects_window -- --ignored --exact --nocapture --test-threads=1
+      - name: sqlite intersects window perf
+        run: cargo test -p geolite --features sqlite spatial_index_accelerates_intersects_window -- --ignored --exact --nocapture --test-threads=1
 
-      - name: geolite-sqlite knn perf
-        run: cargo test -p geolite-sqlite spatial_index_accelerates_knn -- --ignored --exact --nocapture --test-threads=1
+      - name: sqlite knn perf
+        run: cargo test -p geolite --features sqlite spatial_index_accelerates_knn -- --ignored --exact --nocapture --test-threads=1
 
-      - name: geolite-sqlite mixed vs partitioned perf
-        run: cargo test -p geolite-sqlite type_partitioned_vs_mixed_index -- --ignored --exact --nocapture --test-threads=1
+      - name: sqlite mixed vs partitioned perf
+        run: cargo test -p geolite --features sqlite type_partitioned_vs_mixed_index -- --ignored --exact --nocapture --test-threads=1
 
-      - name: geolite-diesel intersects window perf
-        run: cargo test -p geolite-diesel --features sqlite indexed_intersects_window_is_faster -- --ignored --exact --nocapture --test-threads=1
+      - name: diesel intersects window perf
+        run: cargo test -p geolite --features diesel-sqlite indexed_intersects_window_is_faster -- --ignored --exact --nocapture --test-threads=1
 
-      - name: geolite-diesel knn perf
-        run: cargo test -p geolite-diesel --features sqlite indexed_knn_is_faster -- --ignored --exact --nocapture --test-threads=1
+      - name: diesel knn perf
+        run: cargo test -p geolite --features diesel-sqlite indexed_knn_is_faster -- --ignored --exact --nocapture --test-threads=1
 
-      - name: geolite-diesel criterion benches
-        run: cargo bench -p geolite-diesel --features sqlite --benches
+      - name: diesel criterion benches
+        run: cargo bench -p geolite --features diesel-sqlite --benches

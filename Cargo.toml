@@ -1,5 +1,5 @@
 [workspace]
-members  = ["geolite", "geolite-core", "geolite-sqlite", "geolite-diesel", "xtask"]
+members  = ["geolite", "xtask"]
 resolver = "2"
 
 [workspace.package]

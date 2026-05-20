@@ -18,7 +18,7 @@ unsafe extern "C" fn geolite_init(
     _pz_err_msg: *mut *mut std::ffi::c_char,
     _p_api: *const sqlite_wasm_rs::sqlite3_api_routines,
 ) -> std::ffi::c_int {
-    geolite_sqlite::register_functions(db)
+    geolite::sqlite::register_functions(db)
 }
 
 thread_local! {

@@ -25,10 +25,8 @@ dioxus-code-editor = "0.1"
 # demo needs (run, table, map, status indicators).
 dioxus-free-icons = { version = "0.10", features = ["font-awesome-solid"] }
 
-# geolite-* via path so the demo always tracks the live source.
-geolite-core = { path = "../../geolite-core" }
-geolite-sqlite = { path = "../../geolite-sqlite" }
-geolite-diesel = { path = "../../geolite-diesel", features = ["sqlite"] }
+# geolite via path so the demo always tracks the live source.
+geolite = { path = "../../geolite", features = ["diesel-sqlite"] }
 
 # WASM-side SQLite + Diesel SQLite backend.
 diesel = { version = "2", default-features = false, features = ["sqlite"] }

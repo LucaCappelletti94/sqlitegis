@@ -1,4 +1,4 @@
-use geolite_core::function_catalog::{
+use geolite::core::function_catalog::{
     SqliteFunctionSpec, SQLITE_DETERMINISTIC_FUNCTIONS, SQLITE_DIRECT_ONLY_FUNCTIONS,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -105,9 +105,9 @@ fn precommit(full: bool) -> Result<(), String> {
             "cargo",
             "test",
             "-p",
-            "geolite-diesel",
+            "geolite",
             "--features",
-            "sqlite",
+            "diesel-sqlite sqlite-extension",
         ],
         vec!["cargo", "test", "--doc", "--workspace"],
         vec![
@@ -115,9 +115,9 @@ fn precommit(full: bool) -> Result<(), String> {
             "test",
             "--doc",
             "-p",
-            "geolite-diesel",
+            "geolite",
             "--features",
-            "sqlite",
+            "diesel-sqlite",
         ],
     ];
 
@@ -127,41 +127,43 @@ fn precommit(full: bool) -> Result<(), String> {
                 "cargo",
                 "test",
                 "-p",
-                "geolite-diesel",
+                "geolite",
                 "--features",
-                "postgres",
+                "diesel-postgres",
                 "--test",
-                "postgres_integration",
+                "diesel_postgres_integration",
             ],
             vec![
                 "cargo",
                 "test",
                 "-p",
-                "geolite-sqlite",
-                "--target",
-                "wasm32-unknown-unknown",
-                "--test",
-                "wasm",
-            ],
-            vec![
-                "cargo",
-                "test",
-                "-p",
-                "geolite-diesel",
+                "geolite",
                 "--features",
                 "sqlite",
                 "--target",
                 "wasm32-unknown-unknown",
                 "--test",
-                "wasm_integration",
+                "sqlite_wasm",
+            ],
+            vec![
+                "cargo",
+                "test",
+                "-p",
+                "geolite",
+                "--features",
+                "diesel-sqlite",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--test",
+                "diesel_wasm_integration",
             ],
             vec![
                 "cargo",
                 "clippy",
                 "-p",
-                "geolite-core",
-                "-p",
-                "geolite-sqlite",
+                "geolite",
+                "--features",
+                "sqlite",
                 "--target",
                 "wasm32-unknown-unknown",
                 "--",
@@ -231,8 +233,8 @@ fn gen_function_surfaces(check: bool) -> Result<(), String> {
         render_sqlite_callbacks("SQLITE_DIRECT_ONLY_CALLBACKS", SQLITE_DIRECT_ONLY_FUNCTIONS);
     let diesel_functions = render_diesel_functions(&root)?;
 
-    let sqlite_generated_dir = root.join("geolite-sqlite/src/generated");
-    let diesel_generated_dir = root.join("geolite-diesel/src/generated");
+    let sqlite_generated_dir = root.join("geolite/src/sqlite/generated");
+    let diesel_generated_dir = root.join("geolite/src/diesel/generated");
 
     write_or_check(
         &sqlite_generated_dir.join("deterministic_callbacks.rs"),
@@ -326,7 +328,7 @@ fn callback_symbol(spec: &SqliteFunctionSpec, overloaded: bool) -> String {
 }
 
 fn render_diesel_functions(root: &Path) -> Result<String, String> {
-    let template_path = root.join("geolite-diesel/src/functions_template.rs");
+    let template_path = root.join("geolite/src/diesel/functions_template.rs");
     let template = fs::read_to_string(&template_path).map_err(io_err)?;
     let blocks = extract_diesel_define_blocks(&template)?;
 

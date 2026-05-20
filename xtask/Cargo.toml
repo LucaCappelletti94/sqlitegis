@@ -6,4 +6,4 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-geolite-core = { path = "../geolite-core" }
+geolite = { path = "../geolite", default-features = false }

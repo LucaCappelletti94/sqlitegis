@@ -58,13 +58,15 @@ jobs:
           - target: workspace-all-features
             cmd: cargo clippy --workspace --all-features --all-targets -- -D warnings
           - target: core
-            cmd: cargo clippy -p geolite-core --all-targets -- -D warnings
+            cmd: cargo clippy -p geolite --no-default-features --all-targets -- -D warnings
           - target: sqlite
-            cmd: cargo clippy -p geolite-sqlite --all-targets -- -D warnings
+            cmd: cargo clippy -p geolite --no-default-features --features sqlite --all-targets -- -D warnings
+          - target: sqlite-extension
+            cmd: cargo clippy -p geolite --no-default-features --features sqlite-extension --all-targets -- -D warnings
           - target: diesel-sqlite
-            cmd: cargo clippy -p geolite-diesel --features sqlite --all-targets -- -D warnings
+            cmd: cargo clippy -p geolite --features diesel-sqlite --all-targets -- -D warnings
           - target: diesel-postgres
-            cmd: cargo clippy -p geolite-diesel --features postgres --all-targets -- -D warnings
+            cmd: cargo clippy -p geolite --features diesel-postgres --all-targets -- -D warnings
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -84,7 +86,7 @@ jobs:
           components: clippy
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -p geolite-core -p geolite-sqlite --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo clippy -p geolite --features sqlite --target wasm32-unknown-unknown -- -D warnings
 
   test:
     name: Test (${{ matrix.target }})
@@ -97,11 +99,11 @@ jobs:
           - target: workspace
             cmd: cargo test --workspace
           - target: diesel-sqlite
-            cmd: cargo test -p geolite-diesel --features sqlite
+            cmd: cargo test -p geolite --features "diesel-sqlite sqlite-extension"
           - target: doctest-workspace
             cmd: cargo test --doc --workspace
           - target: doctest-diesel-sqlite
-            cmd: cargo test --doc -p geolite-diesel --features sqlite
+            cmd: cargo test --doc -p geolite --features diesel-sqlite
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -117,8 +119,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.86.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace
-      - run: cargo check -p geolite-diesel --features sqlite
-      - run: cargo check -p geolite-diesel --features postgres
+      - run: cargo check -p geolite --features diesel-sqlite
+      - run: cargo check -p geolite --features diesel-postgres
 
   check-cross-platform:
     name: Check (${{ matrix.os }})
@@ -133,11 +135,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace
-      - run: cargo check -p geolite-diesel --features sqlite
-      - run: cargo check -p geolite-diesel --features postgres
+      - run: cargo check -p geolite --features diesel-sqlite
+      - run: cargo check -p geolite --features diesel-postgres
 
   wasm-test:
-    name: WASM Test (geolite-sqlite)
+    name: WASM Test (sqlite)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -147,7 +149,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@wasm-bindgen
-      - run: cargo test -p geolite-sqlite --target wasm32-unknown-unknown --test wasm
+      - run: cargo test -p geolite --features sqlite --target wasm32-unknown-unknown --test sqlite_wasm
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
           WASM_BINDGEN_TEST_TIMEOUT: 120
@@ -163,7 +165,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@wasm-bindgen
-      - run: cargo test -p geolite-diesel --features sqlite --target wasm32-unknown-unknown --test wasm_integration
+      - run: cargo test -p geolite --features diesel-sqlite --target wasm32-unknown-unknown --test diesel_wasm_integration
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
           WASM_BINDGEN_TEST_TIMEOUT: 120
@@ -198,7 +200,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p geolite-diesel --features postgres --test postgres_integration
+      - run: cargo test -p geolite --features diesel-postgres --test diesel_postgres_integration
 
   coverage:
     name: Coverage
@@ -210,10 +212,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo build -p geolite-sqlite
+      - run: cargo build -p geolite --features sqlite-extension
       - run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-      - run: cargo llvm-cov --no-clean -p geolite-diesel --features sqlite --lcov --output-path lcov-diesel.info
-      - run: cargo llvm-cov --no-clean -p geolite-diesel --features postgres --test postgres_integration --lcov --output-path lcov-postgres.info
+      - run: cargo llvm-cov --no-clean -p geolite --features diesel-sqlite --lcov --output-path lcov-diesel.info
+      - run: cargo llvm-cov --no-clean -p geolite --features diesel-postgres --test diesel_postgres_integration --lcov --output-path lcov-postgres.info
       - uses: codecov/codecov-action@v5
         with:
           use_oidc: true
