@@ -808,6 +808,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "geolite"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "criterion",
+ "diesel",
+ "geo",
+ "geozero",
+ "getrandom 0.2.17",
+ "libsqlite3-sys",
+ "serde_json",
+ "sqlite-wasm-rs",
+ "testcontainers-modules",
+ "thiserror 2.0.18",
+ "tokio",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "geolite-core"
 version = "0.1.0"
 dependencies = [

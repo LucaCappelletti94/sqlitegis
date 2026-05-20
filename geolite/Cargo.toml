@@ -1,0 +1,113 @@
+[package]
+name = "geolite"
+version = "0.2.0"
+edition = "2021"
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+description = "PostGIS-style spatial functions for SQLite in pure Rust. SQLite loadable extension and Diesel ORM integration behind feature flags."
+readme = "../README.md"
+repository = "https://github.com/LucaCappelletti94/geolite"
+homepage = "https://github.com/LucaCappelletti94/geolite"
+documentation = "https://docs.rs/geolite"
+keywords = ["geospatial", "sqlite", "postgis", "diesel", "ewkb"]
+categories = ["database", "api-bindings", "algorithms", "science"]
+autotests = false
+
+[package.metadata.docs.rs]
+features = ["sqlite", "sqlite-extension", "diesel-sqlite", "diesel-postgres"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "geolite"
+crate-type = ["lib", "cdylib"]
+
+[features]
+# Pure-Rust geometry plus Diesel + SQLite is the most common usage and matches
+# diesel's own default-features convention. Pass --no-default-features to drop
+# everything except the EWKB/geometry core.
+default = ["diesel-sqlite"]
+
+# In-process SQLite registration API. Pulls libsqlite3-sys on native targets
+# and sqlite-wasm-rs on wasm32. Does NOT export the C entry-point symbols --
+# enable `sqlite-extension` for that.
+sqlite = ["dep:libsqlite3-sys", "dep:sqlite-wasm-rs", "dep:getrandom"]
+
+# Adds the `#[no_mangle]` C entry points (`sqlite3_geolite_init` and
+# `sqlite3_geolitesqlite_init`) so the cdylib build is loadable via
+# SQLite's `load_extension`. Keep this OFF when consuming as a regular Rust
+# dependency to avoid leaking the symbols out of dependent binaries.
+sqlite-extension = ["sqlite"]
+
+# Backend-agnostic Diesel types and expression methods. Enable
+# `diesel-sqlite` or `diesel-postgres` to get backend-specific impls.
+diesel = ["dep:diesel"]
+diesel-sqlite = ["diesel", "sqlite", "diesel/sqlite"]
+diesel-postgres = ["diesel", "diesel/postgres"]
+
+[dependencies]
+geo = { workspace = true }
+geozero = { version = "0.15", features = ["with-wkt", "with-geojson", "with-svg", "with-geo", "with-wkb"] }
+thiserror = "2"
+serde_json = "1"
+diesel = { version = "2", default-features = false, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libsqlite3-sys = { workspace = true, features = ["bundled_bindings"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+sqlite-wasm-rs = { version = "0.5", optional = true }
+getrandom = { version = "0.2", features = ["js"], optional = true }
+
+[dev-dependencies]
+chrono = "0.4"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["plotters", "cargo_bench_support"] }
+libsqlite3-sys = { workspace = true, features = ["bundled_bindings"] }
+testcontainers-modules = { version = "0.15", features = ["postgres"] }
+tokio = { version = "1", features = ["rt", "macros"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+sqlite-wasm-rs = "0.5"
+wasm-bindgen-test = "0.3"
+
+[[test]]
+name = "sqlite_integration"
+path = "tests/sqlite_integration.rs"
+required-features = ["sqlite"]
+
+[[test]]
+name = "sqlite_wasm"
+path = "tests/sqlite_wasm.rs"
+required-features = ["sqlite"]
+
+[[test]]
+name = "diesel_sqlite_types"
+path = "tests/diesel_sqlite_types.rs"
+required-features = ["diesel-sqlite"]
+
+[[test]]
+name = "diesel_expression_methods"
+path = "tests/diesel_expression_methods.rs"
+required-features = ["diesel-sqlite"]
+
+[[test]]
+name = "diesel_sqlite_integration"
+path = "tests/diesel_sqlite_integration.rs"
+required-features = ["diesel-sqlite"]
+
+[[test]]
+name = "diesel_wasm_integration"
+path = "tests/diesel_wasm_integration.rs"
+required-features = ["diesel-sqlite"]
+
+[[test]]
+name = "diesel_postgres_integration"
+path = "tests/diesel_postgres_integration.rs"
+required-features = ["diesel-postgres"]
+
+[[bench]]
+name = "spatial_index"
+path = "benches/spatial_index.rs"
+harness = false
+required-features = ["diesel-sqlite"]
