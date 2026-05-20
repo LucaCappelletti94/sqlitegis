@@ -85,43 +85,18 @@ assert!(sql.contains("st_dwithin"));
 
 Geodesic and spherical functions (`ST_DistanceSphere`, `ST_DistanceSpheroid`, `ST_LengthSphere`, `ST_Azimuth`, `ST_Project`, `ST_DWithinSphere`, `ST_DWithinSpheroid`) require `SRID=4326` non-empty Point inputs. Everything else is rejected with an explicit error. `ST_GeomFromGeoJSON` defaults to `SRID=4326` when none is given. Wrap in `ST_SetSRID` to override. `ST_DWithin*` predicates require a finite, non-negative distance.
 
-## Documentation
-
-```sh
-cargo doc -p geolite --all-features --no-deps --open
-```
-
-## Development
-
-Local checks are driven by [`prek`](https://github.com/j178/prek), a Rust reimplementation of the `pre-commit` framework. Configuration lives in `prek.toml` at the repo root.
-
-```sh
-# Once, per checkout:
-prek install
-
-# Run the same checks CI runs (fmt + clippy + workspace tests + doctests):
-prek run --all-files
-
-# Run the expensive hooks (Postgres via testcontainers, WASM target):
-prek run --stage manual --all-files
-```
-
 ## Benchmarks
 
-Run the Criterion suite with:
-
-```sh
-cargo bench -p geolite --features diesel-sqlite --benches
-```
-
-Measured on March 5, 2026:
+Criterion central estimates, measured 2026-03-05:
 
 | Scenario | Indexed (ORM + R-tree join) | Non-indexed (ORM) | Approx speedup |
 | --- | ---: | ---: | ---: |
 | `intersects_window` | `156.43 us` | `9.3577 ms` | `~59.8x` |
 | `knn` | `84.271 us` | `5.4050 ms` | `~64.1x` |
 
-Values above are Criterion central estimates from one run and can vary by host and load.
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the local-checks setup (`prek`), how to add a new spatial function, and how to run the benchmark and doc commands locally.
 
 ## License
 
