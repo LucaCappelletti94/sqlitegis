@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use dioxus_code::{CodeTheme, Theme};
 use dioxus_code_editor::{CodeEditor, Language};
 use dioxus_free_icons::icons::fa_solid_icons::{
-    FaArrowsRotate, FaBolt, FaBullseye, FaCircleCheck, FaCircleDot, FaCode, FaCompass, FaDatabase,
+    FaArrowsRotate, FaBullseye, FaCircleCheck, FaCircleDot, FaCode, FaCompass, FaDatabase,
     FaFileCode, FaFlag, FaFont, FaMagnifyingGlass, FaPlay, FaSitemap, FaTriangleExclamation,
     FaVectorSquare,
 };
@@ -82,17 +82,10 @@ FROM places
 ORDER BY km LIMIT 100;";
 
 const PRESET_RADIUS: &str = "\
--- Cities within 1000 km of your location.
-SELECT name, country, population,
-  ST_X(geom) AS lon, ST_Y(geom) AS lat
-FROM places
-WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 1000000.0)
-ORDER BY population DESC;";
-
-const PRESET_RADIUS_IDX: &str = "\
--- Indexed radius: R-tree bbox prefilter then geodesic refinement.
--- dlon scales with 1/cos(lat) so the bound stays safe at the poles
--- where one degree of longitude shrinks.
+-- Cities within 1000 km of your location. R-tree bbox prefilter
+-- then geodesic refinement. dlon scales with 1/cos(lat) so the
+-- bound stays safe at the poles where one degree of longitude
+-- shrinks.
 SELECT p.name, p.country, p.population,
   ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
 FROM places p
@@ -219,20 +212,10 @@ pub fn QueryPanel(
                         }
                         PresetChip {
                             label: "Radius",
-                            description: "List every city within 1000 km of the probe point, sorted by population",
+                            description: "List every city within 1000 km of the probe point. R-tree prefiltered so the engine touches O(log N) candidates instead of every row",
                             icon: rsx! { Icon { width: 12, height: 12, icon: FaCompass, class: "btn-icon".to_string() } },
                             on_pick: move |_| {
                                 let new_sql = PRESET_RADIUS.to_string();
-                                sql.set(new_sql.clone());
-                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                            },
-                        }
-                        PresetChip {
-                            label: "Radius+",
-                            description: "Same radius search, but R-tree prefiltered so the engine touches O(log N) candidates instead of every row",
-                            icon: rsx! { Icon { width: 12, height: 12, icon: FaBolt, class: "btn-icon".to_string() } },
-                            on_pick: move |_| {
-                                let new_sql = PRESET_RADIUS_IDX.to_string();
                                 sql.set(new_sql.clone());
                                 on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
                             },
