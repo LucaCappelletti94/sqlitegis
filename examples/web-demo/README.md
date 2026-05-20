@@ -1,12 +1,12 @@
-# sqlitegis web demo
+# SQLiteGIS web demo
 
-A single-page Dioxus app that runs PostGIS-style spatial SQL entirely in the browser, with sqlitegis's functions registered as a SQLite loadable extension via [sqlite-wasm-rs](https://crates.io/crates/sqlite-wasm-rs). Everything (the schema, the dataset, the queries) lives in the page. Nothing hits a server.
+A single-page Dioxus app that runs PostGIS-style spatial SQL entirely in the browser, with SQLiteGIS's functions registered as a SQLite loadable extension via [sqlite-wasm-rs](https://crates.io/crates/sqlite-wasm-rs). Everything (the schema, the dataset, the queries) lives in the page. Nothing hits a server.
 
 ## What it shows
 
-- The full sqlitegis SQL surface (`ST_DistanceSphere`, `ST_DWithinSphere`, `ST_Intersects`, `ST_MakeEnvelope`, `ST_AsText`, `CreateSpatialIndex`, and so on) running on top of SQLite compiled to WASM.
+- The full SQLiteGIS SQL surface (`ST_DistanceSphere`, `ST_DWithinSphere`, `ST_Intersects`, `ST_MakeEnvelope`, `ST_AsText`, `CreateSpatialIndex`, and so on) running on top of SQLite compiled to WASM.
 - Diesel queries (`diesel::sql_query`, `LoadConnection::load`, typed `QueryableByName` rows) against that same connection.
-- 68k cities from the GeoNames `cities5000` dataset loaded into an in-memory SQLite database and indexed via sqlitegis's R-tree shadow table.
+- 68k cities from the GeoNames `cities5000` dataset loaded into an in-memory SQLite database and indexed via SQLiteGIS's R-tree shadow table.
 - A canvas map of every city, with rows from the last query highlighted in orange and a randomly-picked starting city as a green disc that you can drag around.
 
 ## Prerequisites
@@ -48,4 +48,4 @@ The bundled `public/cities5000.tsv` is a slim projection of [GeoNames `cities500
 ## Caveats
 
 - The DB is in-memory. Refresh the page and the data reloads from scratch. Persistence via OPFS would require [`sqlite-wasm-vfs`](https://crates.io/crates/sqlite-wasm-vfs) and is out of scope here.
-- This crate is intentionally **not** a member of the main workspace. Dioxus drags in hundreds of transitive crates that would slow down workspace precommit and `cargo audit`. The sqlitegis path deps still point at the live source under `../`.
+- This crate is intentionally **not** a member of the main workspace. Dioxus drags in hundreds of transitive crates that would slow down workspace precommit and `cargo audit`. The SQLiteGIS path deps still point at the live source under `../`.

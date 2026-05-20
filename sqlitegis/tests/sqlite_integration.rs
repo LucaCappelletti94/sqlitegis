@@ -136,7 +136,7 @@ fn discover_extension_artifact() -> PathBuf {
         }
     }
     panic!(
-        "unable to locate sqlitegis sqlite shared library. looked in:\n{}",
+        "unable to locate SQLiteGIS sqlite shared library. looked in:\n{}",
         attempted
             .iter()
             .map(|p| format!("  - {}", p.display()))

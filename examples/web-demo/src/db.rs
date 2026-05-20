@@ -1,8 +1,8 @@
-//! In-memory SQLite connection wired with the sqlitegis extension.
+//! In-memory SQLite connection wired with the SQLiteGIS extension.
 //!
 //! Mirrors the pattern used in `sqlitegis/tests/diesel_wasm_integration.rs`:
 //! register `sqlitegis_init` once via `sqlite3_auto_extension`, then every
-//! `SqliteConnection::establish(":memory:")` call gets sqlitegis's functions.
+//! `SqliteConnection::establish(":memory:")` call gets SQLiteGIS's functions.
 
 use std::cell::RefCell;
 use std::sync::Once;
@@ -31,7 +31,7 @@ fn ensure_auto_extension() {
     });
 }
 
-/// Open a fresh in-memory database, registering sqlitegis via auto-extension.
+/// Open a fresh in-memory database, registering SQLiteGIS via auto-extension.
 /// Replaces any previously open connection.
 pub fn reopen() -> Result<(), String> {
     ensure_auto_extension();

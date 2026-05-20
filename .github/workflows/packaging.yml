@@ -27,7 +27,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build sqlitegis cdylib (sqlite-extension feature)
+      - name: Build SQLiteGIS cdylib (sqlite-extension feature)
         run: cargo build -p sqlitegis --features sqlite-extension
 
       - name: Locate shared library artifact

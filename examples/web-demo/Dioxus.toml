@@ -3,7 +3,7 @@ name = "sqlitegis-web-demo"
 default_platform = "web"
 
 [web.app]
-title = "sqlitegis -- SQLite spatial queries in the browser"
+title = "SQLiteGIS -- SQLite spatial queries in the browser"
 
 [web.watcher]
 reload_html = true

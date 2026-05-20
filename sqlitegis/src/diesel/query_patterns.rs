@@ -12,7 +12,7 @@
 //! - An R-tree virtual table named `my_table_geom_rtree` with columns
 //!   `(id, xmin, xmax, ymin, ymax)` storing 32-bit float bounding boxes.
 //! - Triggers that keep the R-tree in sync on INSERT/UPDATE/DELETE.
-//! - `CreateSpatialIndex` / `DropSpatialIndex` are sqlitegis-specific SQLite
+//! - `CreateSpatialIndex` / `DropSpatialIndex` are SQLiteGIS-specific SQLite
 //!   helper functions. Unlike PostGIS index DDL, they validate ownership of
 //!   managed trigger/index names before mutating schema objects.
 //! - Ownership markers are persisted in `sqlitegis_spatial_index_catalog`.
@@ -527,9 +527,9 @@
 //! `ST_DistanceSpheroid` currently accept **Point geometries only**. Both
 //! inputs must be non-empty Points with SRID 4326.
 //!
-//! This is a current sqlitegis subset, not full PostGIS parity. PostGIS docs
+//! This is a current SQLiteGIS subset, not full PostGIS parity. PostGIS docs
 //! describe broader non-Point support for `ST_DistanceSphere` and
-//! `ST_DistanceSpheroid`. sqlitegis is currently narrower. The underlying
+//! `ST_DistanceSpheroid`. SQLiteGIS is currently narrower. The underlying
 //! `geo` crate (v0.32) only implements `Distance<Point, Point>` for its
 //! `Haversine` and `Geodesic` metric spaces (unlike Euclidean, which
 //! supports all geometry combinations).

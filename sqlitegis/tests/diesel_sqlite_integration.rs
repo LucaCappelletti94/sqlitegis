@@ -1,7 +1,7 @@
 #![cfg(all(feature = "diesel-sqlite", not(target_arch = "wasm32")))]
 //! Native SQLite integration tests for the Diesel integration.
 //!
-//! Uses `sqlite3_auto_extension` to register sqlitegis functions on every
+//! Uses `sqlite3_auto_extension` to register SQLiteGIS functions on every
 //! `SqliteConnection::establish()` call, then exercises spatial functions
 //! through the Diesel query builder against a real SQLite database.
 

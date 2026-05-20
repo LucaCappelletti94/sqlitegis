@@ -1,6 +1,6 @@
 //! SQLite extension registration via raw FFI.
 //!
-//! Registers all sqlitegis functions on a raw `*mut sqlite3` handle.
+//! Registers all SQLiteGIS functions on a raw `*mut sqlite3` handle.
 //! On native targets also exports the `sqlite3_sqlitegis_init` C entry point
 //! so SQLite can load this library as a loadable extension.
 
@@ -1326,7 +1326,7 @@ unsafe fn ensure_spatial_index_table_shape(
                     ctx,
                     &format!(
                         "{label}: existing table [{rtree_name}] is not an R-tree index \
-                         managed by sqlitegis (missing shadow table [{shadow_name}])"
+                         managed by SQLiteGIS (missing shadow table [{shadow_name}])"
                     ),
                 );
                 return false;
@@ -1794,7 +1794,7 @@ unsafe fn reg(db: *mut sqlite3, name: &str, n_arg: c_int, flags: c_int, xfunc: X
     )
 }
 
-/// Register all sqlitegis spatial functions into an open SQLite database.
+/// Register all SQLiteGIS spatial functions into an open SQLite database.
 ///
 /// Returns `SQLITE_OK` (0) on success, or the first error code on failure.
 ///
@@ -1835,7 +1835,7 @@ pub unsafe fn register_functions(db: *mut sqlite3) -> c_int {
 // Gated on feature = "sqlite-extension" so consumers that enable only the
 // in-process `sqlite` feature do not silently re-export `sqlite3_sqlitegis_init`
 // from their own binaries -- that would collide with anyone else embedding
-// the sqlitegis extension at the C ABI level.
+// the SQLiteGIS extension at the C ABI level.
 
 /// `sqlite3_sqlitegis_init` is the entry point called by SQLite when loading
 /// this library as a loadable extension (`SELECT load_extension('libsqlitegis')`).

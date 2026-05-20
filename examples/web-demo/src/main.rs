@@ -1,4 +1,4 @@
-//! sqlitegis web demo. Runs Diesel queries through sqlitegis's SQLite extension
+//! SQLiteGIS web demo. Runs Diesel queries through SQLiteGIS's SQLite extension
 //! entirely in the browser via sqlite-wasm-rs.
 
 mod components;
@@ -95,18 +95,18 @@ fn App() -> Element {
                 h1 {
                     img {
                         src: "/logo.svg",
-                        alt: "sqlitegis logo",
+                        alt: "SQLiteGIS logo",
                         width: 36,
                         height: 36,
                         class: "title-icon",
                     }
-                    "sqlitegis"
+                    "SQLiteGIS"
                 }
                 p { class: "tagline",
                     "Spatial SQL for SQLite, the PostGIS way."
                 }
                 p { class: "intro",
-                    "sqlitegis is a pure-Rust SQLite extension that ships over 100 "
+                    "SQLiteGIS is a pure-Rust SQLite extension that ships over 100 "
                     "PostGIS-compatible spatial functions plus first-class "
                     "Diesel ORM bindings. Geometries are stored as EWKB BLOBs "
                     "(the PostGIS wire format), and queries support planar and "
@@ -212,7 +212,7 @@ fn StatusBanner(stage: LoadStage) -> Element {
         LoadStage::Booting => rsx! {
             p {
                 Icon { width: 14, height: 14, icon: FaHourglass, class: "status-icon".to_string() }
-                "Initializing in-memory SQLite plus sqlitegis extension..."
+                "Initializing in-memory SQLite plus SQLiteGIS extension..."
             }
         },
         LoadStage::Error(msg) => rsx! {

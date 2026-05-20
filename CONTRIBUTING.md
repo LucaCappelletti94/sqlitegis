@@ -1,4 +1,4 @@
-# Contributing to sqlitegis
+# Contributing to SQLiteGIS
 
 ## Local checks
 
