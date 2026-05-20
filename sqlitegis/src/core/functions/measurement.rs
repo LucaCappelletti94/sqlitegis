@@ -812,4 +812,11 @@ mod tests {
         let empty = geom_from_text("POINT EMPTY", None).unwrap();
         assert!(st_closest_point(&line, &empty).is_err());
     }
+
+    #[test]
+    fn st_length_sphere_rejects_polygon() {
+        let poly = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", Some(4326)).unwrap();
+        let err = st_length_sphere(&poly).expect_err("polygon input must error");
+        assert!(format!("{err}").contains("LineString or MultiLineString"));
+    }
 }

@@ -347,4 +347,20 @@ mod tests {
         assert!(st_tile_envelope(1, 2, 0).is_err());
         assert!(st_tile_envelope(1, 0, 2).is_err());
     }
+
+    #[test]
+    fn st_make_line_rejects_non_finite_point() {
+        use crate::core::ewkb::WKB_POINT;
+        // Build a POINT EWKB with INFINITY x and a finite y. Not the POINT EMPTY
+        // sentinel (which is NaN on both axes), so the NaN guard at line 56 lets
+        // it through and we hit the finite-coord check.
+        let mut inf = vec![0x01u8];
+        inf.extend_from_slice(&WKB_POINT.to_le_bytes());
+        inf.extend_from_slice(&f64::INFINITY.to_le_bytes());
+        inf.extend_from_slice(&0.0f64.to_le_bytes());
+
+        let other = st_point(1.0, 1.0, None).unwrap();
+        let err = st_make_line(&inf, &other).expect_err("Inf x must be rejected");
+        assert!(matches!(err, SqliteGisError::InvalidInput(ref s) if s.contains("finite")));
+    }
 }

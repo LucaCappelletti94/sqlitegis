@@ -38,23 +38,18 @@ fn read_f64(bytes: [u8; 8], little_endian: bool) -> f64 {
     }
 }
 
-fn dimensions_label(has_z: bool, has_m: bool) -> &'static str {
-    match (has_z, has_m) {
-        (true, true) => "ZM",
-        (true, false) => "Z",
-        (false, true) => "M",
-        (false, false) => "XY",
-    }
-}
-
 /// Reject Z/M coordinate layouts when the operation can only process XY.
 pub fn ensure_xy_only(has_z: bool, has_m: bool) -> Result<()> {
-    if has_z || has_m {
-        return Err(SqliteGisError::UnsupportedDimensions {
-            dimensions: dimensions_label(has_z, has_m),
-        });
-    }
-    Ok(())
+    let dimensions = if has_z && has_m {
+        "ZM"
+    } else if has_z {
+        "Z"
+    } else if has_m {
+        "M"
+    } else {
+        return Ok(());
+    };
+    Err(SqliteGisError::UnsupportedDimensions { dimensions })
 }
 
 fn point_is_empty_with_header(blob: &[u8], header: &EwkbHeader) -> Result<bool> {
@@ -758,6 +753,16 @@ mod tests {
     #[test]
     fn patch_wkb_with_srid_rejects_short_input() {
         assert!(patch_wkb_with_srid(&[0x01], 4326).is_err());
+    }
+
+    #[test]
+    fn patch_wkb_with_srid_rejects_invalid_byte_order_marker() {
+        let mut blob = vec![0x02];
+        blob.extend_from_slice(&WKB_POINT.to_le_bytes());
+        let err = patch_wkb_with_srid(&blob, 4326).expect_err("must reject 0x02");
+        assert!(
+            matches!(err, SqliteGisError::InvalidEwkb(ref s) if s.contains("byte order marker"))
+        );
     }
 
     #[test]

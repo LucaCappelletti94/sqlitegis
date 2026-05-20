@@ -529,4 +529,57 @@ mod tests {
         );
         assert_eq!(as_text(&blob).unwrap(), "GEOMETRYCOLLECTION EMPTY");
     }
+
+    #[test]
+    fn geom_from_wkb_rejects_invalid_byte_order_marker() {
+        let wkb = [0x02u8, 0, 0, 0, 0];
+        let err = geom_from_wkb(&wkb, None).expect_err("must reject 0x02 byte order");
+        assert!(
+            matches!(err, SqliteGisError::InvalidEwkb(ref s) if s.contains("byte order marker"))
+        );
+    }
+
+    #[test]
+    fn geom_from_wkb_accepts_big_endian_input() {
+        // Big-endian ISO WKB POINT(1 2). Exercises the 0x00 byte-order branch
+        // and the from_be_bytes path inside `read_raw_wkb_type`.
+        let mut wkb = vec![0x00u8];
+        wkb.extend_from_slice(&WKB_POINT.to_be_bytes());
+        wkb.extend_from_slice(&1.0f64.to_be_bytes());
+        wkb.extend_from_slice(&2.0f64.to_be_bytes());
+        let blob = geom_from_wkb(&wkb, Some(4326)).expect("BE POINT(1 2) must parse");
+        assert_eq!(extract_srid(&blob), Some(4326));
+        assert_eq!(as_text(&blob).unwrap(), "POINT(1 2)");
+    }
+
+    #[test]
+    fn geom_from_geojson_rejects_non_object_json() {
+        // Valid JSON, but not an Object -- exercises the `Value::Object` else-arm
+        // inside `is_empty_point_geojson`.
+        let err = geom_from_geojson("[1,2,3]", None).expect_err("array json must error");
+        assert!(matches!(err, SqliteGisError::Geozero(_)));
+    }
+
+    #[test]
+    fn as_ewkt_returns_plain_point_empty_for_no_srid_input() {
+        let blob = geom_from_text("POINT EMPTY", None).unwrap();
+        assert_eq!(as_ewkt(&blob).unwrap(), "POINT EMPTY");
+    }
+
+    #[test]
+    fn as_binary_emits_be_point_empty_for_be_input() {
+        // Hand-built big-endian EWKB POINT EMPTY: byte-order 0x00, type WKB_POINT
+        // big-endian, two NaN big-endian f64s.
+        let mut blob = vec![0x00u8];
+        blob.extend_from_slice(&WKB_POINT.to_be_bytes());
+        blob.extend_from_slice(&f64::NAN.to_be_bytes());
+        blob.extend_from_slice(&f64::NAN.to_be_bytes());
+
+        let out = as_binary(&blob).expect("be POINT EMPTY round-trips");
+        assert_eq!(out.len(), 21);
+        assert_eq!(out[0], 0x00);
+        assert_eq!(&out[1..5], &WKB_POINT.to_be_bytes());
+        assert!(f64::from_be_bytes(out[5..13].try_into().unwrap()).is_nan());
+        assert!(f64::from_be_bytes(out[13..21].try_into().unwrap()).is_nan());
+    }
 }
