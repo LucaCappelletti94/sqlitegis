@@ -19,7 +19,7 @@ use crate::core::functions::measurement::*;
 use crate::core::functions::operations::*;
 use crate::core::functions::predicates::*;
 
-// -- Constants ----------------------------------------------------------------
+// Constants
 
 const DET: c_int = SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS;
 
@@ -28,7 +28,7 @@ const DET: c_int = SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS;
 const SQLITE_DIRECTONLY_FLAG: c_int = 0x0008_0000;
 const DIRECT: c_int = SQLITE_UTF8 | SQLITE_DIRECTONLY_FLAG;
 
-// -- Argument-extraction helpers ----------------------------------------------
+// Argument-extraction helpers
 
 unsafe fn get_blob<'a>(argv: *mut *mut sqlite3_value, i: usize) -> Option<&'a [u8]> {
     let v = *argv.add(i);
@@ -105,7 +105,7 @@ unsafe fn get_i32_arg(argv: *mut *mut sqlite3_value, i: usize) -> SqlI32Arg {
     }
 }
 
-// -- Result-setting helpers ---------------------------------------------------
+// Result-setting helpers
 
 fn checked_c_int_len(len: usize) -> Option<c_int> {
     c_int::try_from(len).ok()
@@ -258,7 +258,7 @@ unsafe fn optional_srid_arg(
     }
 }
 
-// -- Convenience setter wrappers ----------------------------------------------
+// Convenience setter wrappers
 
 unsafe fn set_bool(ctx: *mut sqlite3_context, v: bool) {
     set_i32(ctx, v as i32);
@@ -270,7 +270,7 @@ unsafe fn set_text_owned(ctx: *mut sqlite3_context, v: impl AsRef<str>) {
     set_text(ctx, v.as_ref());
 }
 
-// -- Callback macros ----------------------------------------------------------
+// Callback macros
 //
 // Each xfunc_* macro below generates an `unsafe extern "C" fn` with the
 // standard SQLite scalar-function signature. NULL blob/text inputs produce
@@ -466,7 +466,7 @@ macro_rules! xfunc_text2_bool {
     };
 }
 
-// -- I/O callbacks ------------------------------------------------------------
+// I/O callbacks
 
 /// text + optional SRID -> blob (generates two callbacks: 1-arg and 2-arg).
 macro_rules! xfunc_text_optsrid_blob {
@@ -558,7 +558,7 @@ xfunc_blob!(
     set_text_owned
 );
 
-// -- Constructor callbacks ----------------------------------------------------
+// Constructor callbacks
 
 unsafe fn st_point_impl(ctx: *mut sqlite3_context, argv: *mut *mut sqlite3_value, with_srid: bool) {
     let arg_count = if with_srid { 3 } else { 2 };
@@ -710,7 +710,7 @@ unsafe extern "C" fn st_tileenvelope_xfunc(
     });
 }
 
-// -- Accessor callbacks -------------------------------------------------------
+// Accessor callbacks
 
 xfunc_blob!(st_srid_xfunc, "ST_SRID", st_srid, set_i32);
 
@@ -809,7 +809,7 @@ xfunc_blob!(
     set_text_owned
 );
 
-// -- Measurement callbacks ----------------------------------------------------
+// Measurement callbacks
 
 xfunc_blob!(st_area_xfunc, "ST_Area", st_area, set_f64);
 xfunc_blob!(st_length_xfunc, "ST_Length", st_length, set_f64);
@@ -872,7 +872,7 @@ xfunc_blob2!(
     set_blob_owned
 );
 
-// -- Operation callbacks ------------------------------------------------------
+// Operation callbacks
 
 xfunc_blob2!(st_union_xfunc, "ST_Union", st_union, set_blob_owned);
 xfunc_blob2!(
@@ -896,7 +896,7 @@ xfunc_blob2!(
 
 xfunc_blob_f64_blob!(st_buffer_xfunc, "ST_Buffer", "distance", st_buffer);
 
-// -- Predicate callbacks ------------------------------------------------------
+// Predicate callbacks
 
 xfunc_blob2!(
     st_intersects_xfunc,
@@ -945,7 +945,7 @@ xfunc_text2_bool!(
     st_relate_match
 );
 
-// -- Spatial index helpers -----------------------------------------------------
+// Spatial index helpers
 
 fn validate_identifier(s: &str) -> Option<&str> {
     if s.is_empty() {
@@ -1427,7 +1427,7 @@ unsafe fn ensure_spatial_index_objects_owned_by_table(
     Some(SpatialIndexOwnership::Absent)
 }
 
-// -- Spatial index callbacks --------------------------------------------------
+// Spatial index callbacks
 
 /// Extract and validate `(table, column)` identifiers from the first two args.
 /// On failure, sets an error on `ctx` and returns `None`.
@@ -1715,7 +1715,7 @@ unsafe extern "C" fn drop_spatial_index_xfunc(
     });
 }
 
-// -- Registration -------------------------------------------------------------
+// Registration
 
 type XFunc = unsafe extern "C" fn(*mut sqlite3_context, c_int, *mut *mut sqlite3_value);
 
@@ -1830,11 +1830,11 @@ pub unsafe fn register_functions(db: *mut sqlite3) -> c_int {
     SQLITE_OK
 }
 
-// -- C entry point for loadable extension (native only) -----------------------
+// C entry point for loadable extension (native only)
 //
 // Gated on feature = "sqlite-extension" so consumers that enable only the
 // in-process `sqlite` feature do not silently re-export `sqlite3_sqlitegis_init`
-// from their own binaries -- that would collide with anyone else embedding
+// from their own binaries. That would collide with anyone else embedding
 // the SQLiteGIS extension at the C ABI level.
 
 /// `sqlite3_sqlitegis_init` is the entry point called by SQLite when loading

@@ -61,7 +61,7 @@ const METRES_PER_DEGREE: f64 = 111_320.0;
 /// `lat_deg` is the latitude of the probe point in WGS84 degrees,
 /// `radius_m` is the search radius in metres. The result is a [`RadiusBbox`]
 /// that is *guaranteed* to enclose every point within `radius_m` of the
-/// probe (it may include extra points; refine with `ST_DWithinSphere`).
+/// probe (it may include extra points, so refine with `ST_DWithinSphere`).
 ///
 /// Worked numbers for a 1000 km radius:
 ///
@@ -98,7 +98,7 @@ pub fn radius_bbox(lat_deg: f64, radius_m: f64) -> RadiusBbox {
 ///
 /// `select_cols` is the projection list to splice between `SELECT` and
 /// `FROM`. Reference base-table columns as `t.<col>` (the table is aliased
-/// `t`); reference the R-tree side as `r.<col>` if needed.
+/// `t`), and the R-tree side as `r.<col>` if needed.
 ///
 /// # Panics
 ///
@@ -150,7 +150,7 @@ pub fn dwithin_sphere_indexed_sql(
 
 /// Render the SQL string that [`dwithin_sphere_indexed_sql`] wraps.
 ///
-/// Same inputs and contract; useful when the caller needs the raw SQL
+/// Same inputs and contract, useful when the caller needs the raw SQL
 /// (for logging, for prepending `EXPLAIN QUERY PLAN`, or for piping it
 /// through `diesel::sql_query` together with extra binds).
 pub fn dwithin_sphere_indexed_sql_string(

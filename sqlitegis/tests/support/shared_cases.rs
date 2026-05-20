@@ -1,6 +1,6 @@
 macro_rules! define_shared_cases {
     ($test_attr:meta) => {
-// -- I/O round-trips -----------------------------------------------------------
+// I/O round-trips
 
 fn assert_i32_out_of_range_error(
     db: &ActiveTestDb,
@@ -183,7 +183,7 @@ fn geomfromgeojson_rejects_two_arg_signature() {
     );
 }
 
-// -- Constructors --------------------------------------------------------------
+// Constructors
 
 #[$test_attr]
 fn st_make_envelope() {
@@ -344,7 +344,7 @@ fn st_collect() {
     assert_eq!(n, 2);
 }
 
-// -- Accessors -----------------------------------------------------------------
+// Accessors
 
 #[$test_attr]
 fn st_srid_default() {
@@ -760,7 +760,7 @@ fn st_is_valid_reason() {
     assert_eq!(r, "Valid Geometry");
 }
 
-// -- Measurement ---------------------------------------------------------------
+// Measurement
 
 #[$test_attr]
 fn st_area_unit_square() {
@@ -1292,7 +1292,7 @@ fn st_closest_point_empty_target_point_errors() {
     assert!(err.contains("does not accept empty points"), "unexpected error: {err}");
 }
 
-// -- Predicates ----------------------------------------------------------------
+// Predicates
 
 #[$test_attr]
 fn st_intersects() {
@@ -1464,7 +1464,7 @@ fn st_relate_match_invalid_matrix_errors() {
     );
 }
 
-// -- Alias function tests -----------------------------------------------------
+// Alias function tests
 
 #[$test_attr]
 fn st_make_point_alias() {
@@ -1504,7 +1504,7 @@ fn st_perimeter2d_alias() {
     assert!((p - 4.0).abs() < 1e-10, "perimeter2d = {p}");
 }
 
-// -- NULL input handling tests ------------------------------------------------
+// NULL input handling tests
 
 #[$test_attr]
 fn null_input_st_astext() {
@@ -1702,7 +1702,7 @@ fn empty_blob_input_reports_error_not_null() {
     assert!(res.is_err(), "empty blob should be rejected, got: {res:?}");
 }
 
-// -- Multi-geometry tests -----------------------------------------------------
+// Multi-geometry tests
 
 #[$test_attr]
 fn st_npoints_multipoint() {
@@ -1854,7 +1854,7 @@ fn st_perimeter_multipolygon() {
     assert!((p - 12.0).abs() < 1e-10, "perimeter = {p}");
 }
 
-// -- Mixed-type distance tests ------------------------------------------------
+// Mixed-type distance tests
 
 #[$test_attr]
 fn st_distance_point_to_linestring() {
@@ -1901,7 +1901,7 @@ fn st_distance_polygon_to_polygon() {
     assert!((d - 2.0).abs() < 1e-10, "distance = {d}");
 }
 
-// -- Validity edge cases ------------------------------------------------------
+// Validity edge cases
 
 #[$test_attr]
 fn st_is_valid_invalid_polygon() {
@@ -1920,7 +1920,7 @@ fn st_is_valid_reason_invalid_polygon() {
     assert_ne!(r, "Valid Geometry", "got: {r}");
 }
 
-// -- MultiLineString spherical length -----------------------------------------
+// MultiLineString spherical length
 
 #[$test_attr]
 fn st_length_sphere_multilinestring() {
@@ -1932,7 +1932,7 @@ fn st_length_sphere_multilinestring() {
     assert!(l > 600_000.0, "length_sphere = {l}");
 }
 
-// -- MultiLineString planar length --------------------------------------------
+// MultiLineString planar length
 
 #[$test_attr]
 fn st_length_multilinestring() {
@@ -1943,7 +1943,7 @@ fn st_length_multilinestring() {
     assert!((l - 10.0).abs() < 1e-10, "length = {l}");
 }
 
-// -- Dimension for various types ----------------------------------------------
+// Dimension for various types
 
 #[$test_attr]
 fn st_dimension_point() {
@@ -1982,7 +1982,7 @@ fn st_dimension_multipolygon() {
     assert_eq!(d, 2);
 }
 
-// -- Centroid of a LineString -------------------------------------------------
+// Centroid of a LineString
 
 #[$test_attr]
 fn st_centroid_linestring() {
@@ -1991,7 +1991,7 @@ fn st_centroid_linestring() {
     assert!((cx - 5.0).abs() < 1e-10, "cx = {cx}");
 }
 
-// -- Num rings with holes -----------------------------------------------------
+// Num rings with holes
 
 #[$test_attr]
 fn st_num_rings_with_hole() {
@@ -2002,7 +2002,7 @@ fn st_num_rings_with_hole() {
     assert_eq!(n, 2); // exterior + 1 interior
 }
 
-// -- Spatial Index tests ------------------------------------------------------
+// Spatial Index tests
 
 #[$test_attr]
 fn spatial_index_create_query_drop() {
@@ -3013,7 +3013,7 @@ fn spatial_index_drop_fails_when_catalog_schema_is_malformed_without_dropping_ma
     );
 }
 
-// -- Boolean operations --------------------------------------------------------
+// Boolean operations
 
 #[$test_attr]
 fn st_union_overlapping_polygons() {
@@ -3123,7 +3123,7 @@ fn st_buffer_empty_returns_empty_polygon() {
     assert_eq!(is_empty, 1, "buffer of empty geometry should be empty");
 }
 
-// -- Alias functions -----------------------------------------------------------
+// Alias functions
 
 #[$test_attr]
 fn st_makepoint_is_alias_for_st_point() {
@@ -3195,7 +3195,7 @@ fn st_perimeter2d_is_alias_for_st_perimeter() {
     assert!((via_2d - via_plain).abs() < 1e-10, "ST_Perimeter2D must equal ST_Perimeter");
 }
 
-// -- Group 1 correctness -------------------------------------------------------
+// Group 1 correctness
 
 #[$test_attr]
 fn st_num_rings_empty_polygon() {
@@ -3211,7 +3211,7 @@ fn st_make_envelope_inverted_coords_errors() {
         .expect_err("inverted xmin/xmax should return an error");
 }
 
-// -- Index-aware query pattern tests ------------------------------------------
+// Index-aware query pattern tests
 
 #[$test_attr]
 fn spatial_index_intersects_window() {
@@ -3280,7 +3280,7 @@ fn spatial_index_inside_polygon() {
     );
 
     assert_eq!(indexed, non_indexed);
-    // Only interior point (5,5) is strictly within; boundary (0,5) is not
+    // Only interior point (5,5) is strictly within. Boundary (0,5) is not
     assert_eq!(indexed, vec![1]);
 }
 
@@ -3458,7 +3458,7 @@ fn spatial_index_knn_nearest_n_geodesic() {
     assert_eq!(indexed[2], 3, "Berlin should be third");
 }
 
-// -- Index speed tests --------------------------------------------------------
+// Index speed tests
 
 #[cfg(not(target_arch = "wasm32"))]
 fn elapsed_since_utc(start: chrono::DateTime<chrono::Utc>) -> std::time::Duration {
@@ -3730,7 +3730,7 @@ fn type_partitioned_vs_mixed_index() {
     eprintln!("  overhead of mixed+filter vs pts-only: {:.1}x",
         mixed_best.as_nanos() as f64 / pts_only_best.as_nanos() as f64);
 
-    // ===== Benchmark 2: "Reverse geocode -- find Polygon containing (25, 9)" =====
+    // Benchmark 2: reverse geocode, find Polygon containing (25, 9)
     let mixed_poly_sql =
         "SELECT g.id FROM mixed g \
          JOIN mixed_geom_rtree r ON g.rowid = r.id \

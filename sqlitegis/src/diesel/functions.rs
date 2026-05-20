@@ -78,7 +78,7 @@
 use crate::diesel::types::Geometry;
 use diesel::sql_types::{Binary, Double, Integer, Nullable, Text};
 
-// -- I/O -----------------------------------------------------------------------
+// I/O
 
 diesel::define_sql_function! {
     /// Parse WKT text into a geometry BLOB.
@@ -140,7 +140,7 @@ diesel::define_sql_function! {
     fn st_geomfromgeojson(json: Text) -> Nullable<Geometry>;
 }
 
-// -- Constructors --------------------------------------------------------------
+// Constructors
 
 diesel::define_sql_function! {
     /// Construct a Point geometry from X and Y coordinates.
@@ -190,7 +190,7 @@ diesel::define_sql_function! {
     fn st_collect(a: Nullable<Geometry>, b: Nullable<Geometry>) -> Nullable<Geometry>;
 }
 
-// -- Accessors -----------------------------------------------------------------
+// Accessors
 
 diesel::define_sql_function! {
     /// Return the SRID embedded in the geometry EWKB header.
@@ -342,7 +342,7 @@ diesel::define_sql_function! {
     fn st_ymax(geom: Nullable<Geometry>) -> Nullable<Double>;
 }
 
-// -- Measurement ---------------------------------------------------------------
+// Measurement
 
 diesel::define_sql_function! {
     /// Return the planar area of a polygon geometry.
@@ -389,7 +389,7 @@ diesel::define_sql_function! {
     fn st_hausdorffdistance(a: Nullable<Geometry>, b: Nullable<Geometry>) -> Nullable<Double>;
 }
 
-// -- Operations ----------------------------------------------------------------
+// Operations
 
 diesel::define_sql_function! {
     /// Compute the geometric union of two polygon geometries.
@@ -416,7 +416,7 @@ diesel::define_sql_function! {
     fn st_buffer(geom: Nullable<Geometry>, distance: Double) -> Nullable<Geometry>;
 }
 
-// -- Predicates ----------------------------------------------------------------
+// Predicates
 
 diesel::define_sql_function! {
     /// Return whether geometries share any interior or boundary points.
@@ -526,7 +526,7 @@ diesel::define_sql_function! {
     fn st_relate_match(matrix: Text, pattern: Text) -> Nullable<diesel::sql_types::Bool>;
 }
 
-// -- Geography variants --------------------------------------------------------
+// Geography variants
 
 diesel::define_sql_function! {
     /// Haversine arc length of a linestring in metres.
@@ -548,7 +548,7 @@ diesel::define_sql_function! {
     fn st_closestpoint(a: Nullable<Geometry>, b: Nullable<Geometry>) -> Nullable<Geometry>;
 }
 
-// -- Aliases -------------------------------------------------------------------
+// Aliases
 // PostGIS-compatible alias names registered alongside their canonical forms.
 
 diesel::define_sql_function! {

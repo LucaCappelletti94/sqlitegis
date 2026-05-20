@@ -82,12 +82,12 @@ fn setup_features_table(c: &mut SqliteConnection) {
     .unwrap();
 }
 
-// -- Spatial function execution via Diesel ------------------------------------
+// Spatial function execution via Diesel
 
 macro_rules! define_diesel_sqlite_tests {
     ($test_attr:meta) => {
 
-// -- ST_Point + ST_AsText -----------------------------------------------------
+// ST_Point + ST_AsText
 
 #[$test_attr]
 fn st_point_and_astext() {
@@ -157,7 +157,7 @@ fn st_geomfromgeojson_srid_override_uses_setsrid_execution() {
     assert_eq!(srid, Some(3857));
 }
 
-// -- ST_Distance --------------------------------------------------------------
+// ST_Distance
 
 #[$test_attr]
 fn st_distance_execution() {
@@ -183,7 +183,7 @@ fn st_makeline_rejects_empty_points_execution() {
     assert!(msg.contains("point must not be empty"), "got: {msg}");
 }
 
-// -- ST_GeomFromText ----------------------------------------------------------
+// ST_GeomFromText
 
 #[$test_attr]
 fn st_geomfromtext_execution() {
@@ -197,7 +197,7 @@ fn st_geomfromtext_execution() {
     assert!(wkt.contains("LINESTRING"), "got: {wkt}");
 }
 
-// -- ST_Area ------------------------------------------------------------------
+// ST_Area
 
 #[$test_attr]
 fn st_area_execution() {
@@ -211,7 +211,7 @@ fn st_area_execution() {
     assert!((area - 100.0).abs() < 1e-10, "expected 100.0, got {area}");
 }
 
-// -- ST_Centroid --------------------------------------------------------------
+// ST_Centroid
 
 #[$test_attr]
 fn st_centroid_execution() {
@@ -226,7 +226,7 @@ fn st_centroid_execution() {
     assert!(wkt.contains("5"), "centroid should contain 5, got: {wkt}");
 }
 
-// -- Diesel query builder: function-style -------------------------------------
+// Diesel query builder: function-style
 
 #[$test_attr]
 fn diesel_select_st_point() {
@@ -455,7 +455,7 @@ fn diesel_select_st_centroid() {
     assert!(wkt.contains("2"), "centroid should be at (2,2), got: {wkt}");
 }
 
-// -- Method-style ORM queries -------------------------------------------------
+// Method-style ORM queries
 
 #[$test_attr]
 fn method_st_astext_in_select() {
@@ -667,7 +667,7 @@ fn method_st_relate_match_geoms_in_select() {
     assert_eq!(impossible_pattern, Some(false));
 }
 
-// -- Full ORM roundtrip ------------------------------------------------------
+// Full ORM roundtrip
 
 #[$test_attr]
 fn orm_geometry_roundtrip() {
@@ -740,7 +740,7 @@ fn orm_null_geometry() {
     assert!(row.geom.is_none());
 }
 
-// -- Spatial index correctness ------------------------------------------------
+// Spatial index correctness
 
 #[$test_attr]
 fn spatial_index_correctness() {
@@ -803,7 +803,7 @@ fn spatial_index_correctness() {
     assert_eq!(ids, expected, "spatial index query returned wrong points");
 }
 
-// -- Alias SQL functions -------------------------------------------------------
+// Alias SQL functions
 // Verify that every name alias registered in the SQLite extension is also
 // reachable through a Diesel connection (raw SQL path).
 
@@ -864,7 +864,7 @@ fn st_perimeter2d_alias_works_via_sql() {
     assert!((perim - 4.0).abs() < 1e-10, "ST_Perimeter2D = {perim}");
 }
 
-// -- Typed Diesel alias functions ----------------------------------------------
+// Typed Diesel alias functions
 // These use the declared Diesel SQL functions (not raw SQL), verifying that
 // the type-system wrappers are wired to the correct SQL names.
 
@@ -930,7 +930,7 @@ fn st_perimeter2d_typed_diesel_function() {
     assert!((perim - 4.0).abs() < 1e-10, "ST_Perimeter2D = {perim}");
 }
 
-// -- Index-aware query pattern tests ------------------------------------------
+// Index-aware query pattern tests
 // Indexed and non-indexed paths both use the Diesel query builder.
 
 #[$test_attr]
@@ -1031,7 +1031,7 @@ fn indexed_inside_polygon() {
         .unwrap();
 
     assert_eq!(idx_ids, non_ids);
-    // Only interior point (5,5) is strictly within; boundary (0,5) is not
+    // Only interior point (5,5) is strictly within. Boundary (0,5) is not
     assert_eq!(idx_ids, vec![1]);
 }
 
@@ -1245,7 +1245,7 @@ fn knn_nearest_n_geodesic() {
     assert_eq!(ids, non_ids);
 }
 
-// -- Index speed tests --------------------------------------------------------
+// Index speed tests
 
 #[cfg(not(target_arch = "wasm32"))]
 fn elapsed_since_utc(start: chrono::DateTime<chrono::Utc>) -> std::time::Duration {

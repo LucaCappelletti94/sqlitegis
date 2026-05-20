@@ -217,7 +217,7 @@ fn draw(
 
     let dot = if zoom >= 4.0 { 2.5 } else { 1.5 };
 
-    // Cities -- one draw per city, clipped to the visible canvas.
+    // Cities: one draw per city, clipped to the visible canvas.
     ctx.set_fill_style_str(&String::from("#3a4554"));
     for &(lon, lat) in all {
         if lon < lon_min - 1.0 || lon > lon_max + 1.0 {

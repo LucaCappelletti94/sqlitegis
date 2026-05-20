@@ -22,7 +22,7 @@ fn validated_header(blob: &[u8]) -> Result<EwkbHeader> {
     validate_ewkb_payload(blob)
 }
 
-/// ST_SRID -- return the SRID stored in the EWKB header.
+/// ST_SRID: return the SRID stored in the EWKB header.
 ///
 /// # Example
 ///
@@ -38,7 +38,7 @@ pub fn st_srid(blob: &[u8]) -> Result<i32> {
     Ok(header.srid.unwrap_or(0))
 }
 
-/// ST_SetSRID -- rewrite the SRID in the EWKB header.
+/// ST_SetSRID: rewrite the SRID in the EWKB header.
 ///
 /// # Example
 ///
@@ -54,7 +54,7 @@ pub fn st_set_srid(blob: &[u8], srid: i32) -> Result<Vec<u8>> {
     set_srid(blob, srid)
 }
 
-/// ST_GeometryType / GeometryType -- return the PostGIS geometry type string.
+/// ST_GeometryType / GeometryType: return the PostGIS geometry type string.
 ///
 /// # Example
 ///
@@ -70,7 +70,7 @@ pub fn st_geometry_type(blob: &[u8]) -> Result<&'static str> {
     Ok(geom_type_name(header.geom_type))
 }
 
-/// ST_NDims -- number of coordinate dimensions (2, 3, or 4).
+/// ST_NDims: number of coordinate dimensions (2, 3, or 4).
 ///
 /// # Example
 ///
@@ -88,7 +88,7 @@ pub fn st_ndims(blob: &[u8]) -> Result<i32> {
     Ok(2 + z + m)
 }
 
-/// ST_CoordDim -- same as ST_NDims for non-curve geometries.
+/// ST_CoordDim: same as ST_NDims for non-curve geometries.
 ///
 /// # Example
 ///
@@ -103,7 +103,7 @@ pub fn st_coord_dim(blob: &[u8]) -> Result<i32> {
     st_ndims(blob)
 }
 
-/// ST_Zmflag -- 0=2D, 1=M only, 2=Z only, 3=ZM.
+/// ST_Zmflag: 0=2D, 1=M only, 2=Z only, 3=ZM.
 ///
 /// # Example
 ///
@@ -125,7 +125,7 @@ pub fn st_zmflag(blob: &[u8]) -> Result<i32> {
     Ok(flag)
 }
 
-/// ST_IsEmpty -- true if the geometry has no points.
+/// ST_IsEmpty: true if the geometry has no points.
 ///
 /// # Example
 ///
@@ -144,7 +144,7 @@ pub fn st_is_empty(blob: &[u8]) -> Result<bool> {
     Ok(is_empty_geometry(&geom))
 }
 
-/// ST_MemSize -- byte length of the EWKB blob.
+/// ST_MemSize: byte length of the EWKB blob.
 ///
 /// # Example
 ///
@@ -160,7 +160,7 @@ pub fn st_mem_size(blob: &[u8]) -> Result<i64> {
     Ok(blob.len() as i64)
 }
 
-/// ST_X -- X coordinate of a Point.
+/// ST_X: X coordinate of a Point.
 ///
 /// # Example
 ///
@@ -180,7 +180,7 @@ pub fn st_x(blob: &[u8]) -> Result<Option<f64>> {
     }
 }
 
-/// ST_Y -- Y coordinate of a Point.
+/// ST_Y: Y coordinate of a Point.
 ///
 /// # Example
 ///
@@ -200,7 +200,7 @@ pub fn st_y(blob: &[u8]) -> Result<Option<f64>> {
     }
 }
 
-/// ST_Z -- Z coordinate of a Point when present.
+/// ST_Z: Z coordinate of a Point when present.
 ///
 /// Contract:
 /// - Point Z / Point ZM: returns Z coordinate
@@ -247,7 +247,7 @@ pub fn st_z(blob: &[u8]) -> Result<Option<f64>> {
     Ok(Some(z))
 }
 
-/// ST_NumPoints -- number of points in a LineString.
+/// ST_NumPoints: number of points in a LineString.
 ///
 /// # Example
 ///
@@ -266,7 +266,7 @@ pub fn st_num_points(blob: &[u8]) -> Result<i32> {
     }
 }
 
-/// ST_NPoints -- total point count across any geometry type.
+/// ST_NPoints: total point count across any geometry type.
 ///
 /// # Example
 ///
@@ -304,7 +304,7 @@ pub fn st_npoints(blob: &[u8]) -> Result<i32> {
     Ok(count(&geom) as i32)
 }
 
-/// ST_NumGeometries -- component count for multi/collection types.
+/// ST_NumGeometries: component count for multi/collection types.
 ///
 /// # Example
 ///
@@ -330,7 +330,7 @@ pub fn st_num_geometries(blob: &[u8]) -> Result<i32> {
     Ok(n as i32)
 }
 
-/// ST_NumInteriorRings / ST_NumInteriorRing -- hole count in a Polygon.
+/// ST_NumInteriorRings / ST_NumInteriorRing: hole count in a Polygon.
 ///
 /// # Example
 ///
@@ -349,7 +349,7 @@ pub fn st_num_interior_rings(blob: &[u8]) -> Result<i32> {
     }
 }
 
-/// ST_NumRings -- total ring count (exterior + interiors) for a Polygon.
+/// ST_NumRings: total ring count (exterior + interiors) for a Polygon.
 ///
 /// # Example
 ///
@@ -374,7 +374,7 @@ pub fn st_num_rings(blob: &[u8]) -> Result<i32> {
     }
 }
 
-/// ST_PointN -- nth point (1-based) of a LineString.
+/// ST_PointN: nth point (1-based) of a LineString.
 ///
 /// # Example
 ///
@@ -410,7 +410,7 @@ pub fn st_point_n(blob: &[u8], n: i32, srid: Option<i32>) -> Result<Vec<u8>> {
     }
 }
 
-/// ST_StartPoint -- first point of a LineString.
+/// ST_StartPoint: first point of a LineString.
 ///
 /// # Example
 ///
@@ -426,7 +426,7 @@ pub fn st_start_point(blob: &[u8]) -> Result<Vec<u8>> {
     st_point_n(blob, 1, None)
 }
 
-/// ST_EndPoint -- last point of a LineString.
+/// ST_EndPoint: last point of a LineString.
 ///
 /// # Example
 ///
@@ -452,7 +452,7 @@ pub fn st_end_point(blob: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-/// ST_ExteriorRing -- exterior ring of a Polygon as a LineString.
+/// ST_ExteriorRing: exterior ring of a Polygon as a LineString.
 ///
 /// # Example
 ///
@@ -472,7 +472,7 @@ pub fn st_exterior_ring(blob: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-/// ST_InteriorRingN -- nth interior ring (1-based) of a Polygon.
+/// ST_InteriorRingN: nth interior ring (1-based) of a Polygon.
 ///
 /// # Example
 ///
@@ -509,7 +509,7 @@ pub fn st_interior_ring_n(blob: &[u8], n: i32) -> Result<Vec<u8>> {
     }
 }
 
-/// ST_GeometryN -- nth sub-geometry (1-based) of a collection.
+/// ST_GeometryN: nth sub-geometry (1-based) of a collection.
 ///
 /// # Example
 ///
@@ -559,7 +559,7 @@ pub fn st_geometry_n(blob: &[u8], n: i32) -> Result<Vec<u8>> {
     }
 }
 
-/// ST_Dimension -- topological dimension: 0=point, 1=line, 2=area.
+/// ST_Dimension: topological dimension: 0=point, 1=line, 2=area.
 ///
 /// # Example
 ///
@@ -595,7 +595,7 @@ pub fn st_dimension(blob: &[u8]) -> Result<i32> {
     Ok(geometry_dimension(&geom))
 }
 
-/// ST_Envelope -- axis-aligned envelope geometry.
+/// ST_Envelope: axis-aligned envelope geometry.
 ///
 /// Current behavior:
 /// - non-empty: returns the rectangular envelope as a Polygon
@@ -622,7 +622,7 @@ pub fn st_envelope(blob: &[u8]) -> Result<Vec<u8>> {
     write_ewkb(&Geometry::Rect(rect), srid)
 }
 
-/// ST_IsValid -- true when the geometry passes validity checks.
+/// ST_IsValid: true when the geometry passes validity checks.
 ///
 /// # Example
 ///
@@ -638,7 +638,7 @@ pub fn st_is_valid(blob: &[u8]) -> Result<bool> {
     Ok(geom.is_valid())
 }
 
-/// ST_IsValidReason -- human-readable validity report.
+/// ST_IsValidReason: human-readable validity report.
 ///
 /// # Example
 ///
@@ -654,7 +654,7 @@ pub fn st_is_valid_reason(blob: &[u8]) -> Result<String> {
     if geom.is_valid() {
         Ok("Valid Geometry".to_string())
     } else {
-        // geo's Validation trait gives typed errors; collect them
+        // geo's Validation trait gives typed errors. Collect them
         let mut reasons = Vec::new();
         if let Err(e) = geom.check_validation() {
             reasons.push(format!("{e}"));

@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 description = "Browser demo for SQLiteGIS: Diesel + sqlite-wasm-rs + a city-distance UI."
 
-# Kept out of the main workspace on purpose -- Dioxus drags in hundreds of
+# Kept out of the main workspace on purpose. Dioxus drags in hundreds of
 # transitive crates that would slow down workspace precommit/audit.
 [workspace]
 

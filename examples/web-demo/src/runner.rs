@@ -43,7 +43,7 @@ pub fn run(sql: &str, user_lon: f64, user_lat: f64) -> QueryOutcome {
 
     let outcome = db::with_conn(|conn| -> Result<QueryOutcome, String> {
         // `diesel::sql_query` carries the whole script (SQLite handles `;`
-        // chaining). We try `load` first so SELECT rows come through; if the
+        // chaining). We try `load` first so SELECT rows come through. If the
         // script produced no column headers we treat it as DDL/DML and report
         // affected-row count via `changes()`.
         //

@@ -33,7 +33,7 @@ diesel::table! { perf_grid (id) { id -> Integer, geom -> Nullable<sqlitegis::die
 diesel::table! { perf_grid_geom_rtree (id) { id -> Integer, xmin -> Double, xmax -> Double, ymin -> Double, ymax -> Double, } }
 diesel::allow_tables_to_appear_in_same_query!(perf_grid, perf_grid_geom_rtree);
 
-// -- Auto-extension registration ----------------------------------------------
+// Auto-extension registration
 
 static INIT: Once = Once::new();
 
@@ -53,7 +53,7 @@ fn conn() -> SqliteConnection {
     SqliteConnection::establish(":memory:").unwrap()
 }
 
-// -- Shared test definitions --------------------------------------------------
+// Shared test definitions
 
 include!("diesel_test_helpers.rs");
 define_diesel_sqlite_tests!(test);
@@ -64,7 +64,7 @@ fn shared_predicates_and_relate_bool_semantics() {
     predicate_bool_helpers::assert_predicates_and_relate_bool_semantics_sqlite(&mut c);
 }
 
-// -- Native-only: deterministic spatial index behavior -----------------------
+// Native-only: deterministic spatial index behavior
 
 #[test]
 fn spatial_index_narrows_candidates_deterministically() {
@@ -239,7 +239,7 @@ fn spatial_index_stays_in_sync_across_writes() {
     // triggers exist after CreateSpatialIndex. This one proves they fire on
     // the right events and produce the right rtree contents across INSERT,
     // UPDATE, DELETE, and post-drop writes. Failure here means the rtree has
-    // drifted from the base table -- the silent-corruption mode the trigger
+    // drifted from the base table. That is the silent-corruption mode the trigger
     // installation is meant to prevent.
     let mut c = conn();
     sql_query("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)")
@@ -520,7 +520,7 @@ fn catalog_semantic_goldens_via_diesel_sqlite() {
     }
 }
 
-// -- dwithin_sphere_indexed_sql query helper ---------------------------------
+// dwithin_sphere_indexed_sql query helper
 
 #[derive(QueryableByName, Debug)]
 struct IdRow {

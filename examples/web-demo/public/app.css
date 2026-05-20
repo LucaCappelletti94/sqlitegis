@@ -40,6 +40,9 @@ main {
     grid-template-columns: 1fr 1fr;
     gap: 16px;
     align-items: start;
+    /* Enable `cqi` units inside descendants. Used by the results panel
+       to cap its height at the map canvas's rendered height. */
+    container-type: inline-size;
 }
 
 .panel-grid > section {
@@ -61,22 +64,16 @@ main {
     margin: 0;
 }
 
-/* In the Query panel the heading is grouped with the preset chips on the
-   left side of the header, with the Run button still pinned to the right
-   by the parent .panel-header's space-between layout. */
-.header-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-width: 0;
-    flex-wrap: wrap;
-}
-
+/* Preset chips sit on their own row below the panel header, so the Run
+   button stays inline with the `Query` h2 (mirroring Schema / Reset DB).
+   Horizontal padding matches the header inset since the parent section
+   is full-bleed for the editor. */
 .presets {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
+    padding: 0 16px 12px;
 }
 
 /* The Schema and Query panels drop side and bottom padding so the editor
@@ -99,13 +96,15 @@ main {
 }
 
 /* The Results panel drops its inner padding so the table goes edge to
-   edge. The 2:1 aspect ratio matches the map canvas (1080x540), which
-   sits in the same grid row at the same column width, so both panels
-   land at exactly the same height. Placeholder/error variants reapply
-   their own inset padding since they shouldn't touch the borders. */
+   edge. The section sizes to its content (so a 3-row result stays
+   compact) but is capped at the map's rendered height: in a 1fr 1fr
+   grid with 16px gap the column width is (100cqi - 16px) / 2, and the
+   2:1 map renders at half that, giving the calc below. Placeholder /
+   error variants reapply their own inset padding since they shouldn't
+   touch the borders. */
 .panel-grid > section.results-panel {
     padding: 0;
-    aspect-ratio: 2 / 1;
+    max-height: calc(25cqi - 4px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -258,7 +257,7 @@ section.status p {
     font-size: 13px;
 }
 
-/* Plain textareas only -- the editor's internal textarea (.dxc-editor-input)
+/* Plain textareas only. The editor's internal textarea (.dxc-editor-input)
    is left alone so the library's own positioning and the syntax-highlight
    overlay stay intact. */
 textarea:not(.dxc-editor-input) {
@@ -345,6 +344,12 @@ table.results th, table.results td {
     border-bottom: 1px solid var(--border);
     padding: 6px 8px;
     text-align: left;
+}
+
+/* Strip the row separator under the last row so the table doesn't end
+   with a line resting against the panel's bottom border. */
+table.results tbody tr:last-child td {
+    border-bottom: none;
 }
 
 table.results th {
@@ -478,7 +483,7 @@ section.status p {
 .panel-grid > *:nth-child(3) { animation-delay: 140ms; }
 .panel-grid > *:nth-child(4) { animation-delay: 210ms; }
 
-/* Respect the user's accessibility setting -- no animation for anyone who
+/* Respect the user's accessibility setting: no animation for anyone who
    has asked to reduce motion. */
 @media (prefers-reduced-motion: reduce) {
     .loading-stack,

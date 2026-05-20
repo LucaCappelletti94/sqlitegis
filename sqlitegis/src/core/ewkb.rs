@@ -1,14 +1,14 @@
 //! EWKB (Extended Well-Known Binary) parser and writer.
 //!
 //! Wire format:
-//!   [0x01|0x00]   -- byte order marker (little-endian or big-endian)
-//!   [u32]         -- geometry type with flags (in the declared byte order)
-//!                   Bit 29 (0x20000000): SRID present
-//!                   Bit 31 (0x80000000): Z dimension
-//!                   Bit 30 (0x40000000): M dimension
-//!                   Bits 0-28: geometry type (1=Point, 2=LineString, ...)
-//!   [i32]         -- SRID (only when SRID flag set, in declared byte order)
-//!   ...             -- ISO WKB geometry payload
+//!   [0x01|0x00]: byte order marker (little-endian or big-endian)
+//!   [u32]: geometry type with flags (in the declared byte order)
+//!     Bit 29 (0x20000000): SRID present
+//!     Bit 31 (0x80000000): Z dimension
+//!     Bit 30 (0x40000000): M dimension
+//!     Bits 0-28: geometry type (1=Point, 2=LineString, etc.)
+//!   [i32]: SRID (only when SRID flag set, in declared byte order)
+//!   [rest]: ISO WKB geometry payload
 
 use geo::{Geometry, Point};
 use geozero::wkb::Ewkb;
@@ -16,12 +16,12 @@ use geozero::{CoordDimensions, ToGeo, ToWkb};
 
 use crate::core::error::{Result, SqliteGisError};
 
-// -- EWKB flag constants -------------------------------------------------------
+// EWKB flag constants
 pub const EWKB_SRID_FLAG: u32 = 0x20000000;
 pub const EWKB_Z_FLAG: u32 = 0x80000000;
 pub const EWKB_M_FLAG: u32 = 0x40000000;
 
-// -- Geometry type codes (ISO WKB) ---------------------------------------------
+// Geometry type codes (ISO WKB)
 pub const WKB_POINT: u32 = 1;
 pub const WKB_LINESTRING: u32 = 2;
 pub const WKB_POLYGON: u32 = 3;
@@ -104,7 +104,7 @@ pub fn validate_xy_ewkb_payload(blob: &[u8]) -> Result<EwkbHeader> {
 /// Parsed EWKB header metadata.
 #[derive(Debug, Clone)]
 pub struct EwkbHeader {
-    /// Base geometry type code (1=Point, 2=LineString, ..., 7=GeometryCollection).
+    /// Base geometry type code (1=Point, 2=LineString, up to 7=GeometryCollection).
     pub geom_type: u32,
     /// SRID embedded in the EWKB, if the SRID flag is set.
     pub srid: Option<i32>,

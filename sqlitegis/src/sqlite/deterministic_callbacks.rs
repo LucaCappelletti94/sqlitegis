@@ -1,7 +1,7 @@
 // Hand-maintained. Each row must correspond 1:1 to an entry in
 // crate::core::function_catalog::SQLITE_DETERMINISTIC_FUNCTIONS. The
 // assert_catalog_callback_parity const-assertion below in ffi.rs verifies
-// this at compile time -- if you add or remove an entry, update the catalog
+// this at compile time. If you add or remove an entry, update the catalog
 // and the const-assertion will catch any drift.
 
 const SQLITE_DETERMINISTIC_CALLBACKS: &[SqliteCallbackSpec] = &[

@@ -179,7 +179,7 @@ pub fn QueryPanel(
     // Auto-re-run the current query whenever the user's position changes
     // (map click, random initial placement). The SQL itself is read via
     // `peek` so manual edits to the textarea don't trigger a re-run by
-    // themselves -- only position changes do. NaN means the loader hasn't
+    // themselves. Only position changes do. NaN means the loader hasn't
     // picked a starting city yet, so skip until we have a real position.
     use_effect(move || {
         let lon = *user_lon.read();
@@ -194,103 +194,9 @@ pub fn QueryPanel(
     rsx! {
         section { class: "query-panel",
             div { class: "panel-header",
-                div { class: "header-left",
-                    h2 {
-                        Icon { width: 16, height: 16, icon: FaCode, class: "section-icon".to_string() }
-                        "Query"
-                    }
-                    div { class: "presets",
-                        PresetChip {
-                            label: "KNN",
-                            description: "Find the 10 cities closest to the probe point, ranked by geodesic distance on the WGS84 ellipsoid",
-                            icon: rsx! { Icon { width: 12, height: 12, icon: FaBullseye, class: "btn-icon".to_string() } },
-                            on_pick: move |_| {
-                                let new_sql = PRESET_KNN.to_string();
-                                sql.set(new_sql.clone());
-                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                            },
-                        }
-                        PresetChip {
-                            label: "Radius",
-                            description: "List every city within 1000 km of the probe point. R-tree prefiltered so the engine touches O(log N) candidates instead of every row",
-                            icon: rsx! { Icon { width: 12, height: 12, icon: FaCompass, class: "btn-icon".to_string() } },
-                            on_pick: move |_| {
-                                let new_sql = PRESET_RADIUS.to_string();
-                                sql.set(new_sql.clone());
-                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                            },
-                        }
-                        PresetChip {
-                            label: "BBOX",
-                            description: "List cities inside a 30 by 30 degree box centered on the probe point, top 100 by population",
-                            icon: rsx! { Icon { width: 12, height: 12, icon: FaVectorSquare, class: "btn-icon".to_string() } },
-                            on_pick: move |_| {
-                                let new_sql = PRESET_ENVELOPE.to_string();
-                                sql.set(new_sql.clone());
-                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                            },
-                        }
-                        PresetChip {
-                            label: "AsText",
-                            description: "Convert the EWKB BLOB geometry column to readable WKT for the first 8 cities",
-                            icon: rsx! { Icon { width: 12, height: 12, icon: FaFont, class: "btn-icon".to_string() } },
-                            on_pick: move |_| {
-                                let new_sql = PRESET_ASTEXT.to_string();
-                                sql.set(new_sql.clone());
-                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                            },
-                        }
-                        PresetChip {
-                            label: "RTree",
-                            description: "Same KNN result, but with an explicit JOIN against the R-tree shadow table so the SQLite virtual-table index actually drives the prefilter",
-                            icon: rsx! { Icon { width: 12, height: 12, icon: FaSitemap, class: "btn-icon".to_string() } },
-                            on_pick: move |_| {
-                                let new_sql = PRESET_RTREE.to_string();
-                                sql.set(new_sql.clone());
-                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                            },
-                        }
-                        PresetChip {
-                            label: "Explain",
-                            description: "Show the query plan SQLite picks for an R-tree-backed lookup, useful to confirm the virtual table is in use",
-                            icon: rsx! { Icon { width: 12, height: 12, icon: FaMagnifyingGlass, class: "btn-icon".to_string() } },
-                            on_pick: move |_| {
-                                let new_sql = PRESET_EXPLAIN.to_string();
-                                sql.set(new_sql.clone());
-                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                            },
-                        }
-                        PresetChip {
-                            label: "Countries",
-                            description: "Group cities within 3000 km of the probe by country and rank by city count and total population",
-                            icon: rsx! { Icon { width: 12, height: 12, icon: FaFlag, class: "btn-icon".to_string() } },
-                            on_pick: move |_| {
-                                let new_sql = PRESET_COUNTRIES.to_string();
-                                sql.set(new_sql.clone());
-                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                            },
-                        }
-                        PresetChip {
-                            label: "Rings",
-                            description: "Aggregate city counts and total population into concentric distance bands around the probe",
-                            icon: rsx! { Icon { width: 12, height: 12, icon: FaCircleDot, class: "btn-icon".to_string() } },
-                            on_pick: move |_| {
-                                let new_sql = PRESET_RINGS.to_string();
-                                sql.set(new_sql.clone());
-                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                            },
-                        }
-                        PresetChip {
-                            label: "GeoJSON",
-                            description: "Serialize the top 5 most populous cities as GeoJSON Point features",
-                            icon: rsx! { Icon { width: 12, height: 12, icon: FaFileCode, class: "btn-icon".to_string() } },
-                            on_pick: move |_| {
-                                let new_sql = PRESET_GEOJSON.to_string();
-                                sql.set(new_sql.clone());
-                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                            },
-                        }
-                    }
+                h2 {
+                    Icon { width: 16, height: 16, icon: FaCode, class: "section-icon".to_string() }
+                    "Query"
                 }
                 button {
                     aria_label: "Run the query against the loaded database",
@@ -301,6 +207,98 @@ pub fn QueryPanel(
                     },
                     Icon { width: 13, height: 13, icon: FaPlay, class: "btn-icon".to_string() }
                     "Run"
+                }
+            }
+            div { class: "presets",
+                PresetChip {
+                    label: "KNN",
+                    description: "Find the 10 cities closest to the probe point, ranked by geodesic distance on the WGS84 ellipsoid",
+                    icon: rsx! { Icon { width: 12, height: 12, icon: FaBullseye, class: "btn-icon".to_string() } },
+                    on_pick: move |_| {
+                        let new_sql = PRESET_KNN.to_string();
+                        sql.set(new_sql.clone());
+                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
+                    },
+                }
+                PresetChip {
+                    label: "Radius",
+                    description: "List every city within 1000 km of the probe point. R-tree prefiltered so the engine touches O(log N) candidates instead of every row",
+                    icon: rsx! { Icon { width: 12, height: 12, icon: FaCompass, class: "btn-icon".to_string() } },
+                    on_pick: move |_| {
+                        let new_sql = PRESET_RADIUS.to_string();
+                        sql.set(new_sql.clone());
+                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
+                    },
+                }
+                PresetChip {
+                    label: "BBOX",
+                    description: "List cities inside a 30 by 30 degree box centered on the probe point, top 100 by population",
+                    icon: rsx! { Icon { width: 12, height: 12, icon: FaVectorSquare, class: "btn-icon".to_string() } },
+                    on_pick: move |_| {
+                        let new_sql = PRESET_ENVELOPE.to_string();
+                        sql.set(new_sql.clone());
+                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
+                    },
+                }
+                PresetChip {
+                    label: "AsText",
+                    description: "Convert the EWKB BLOB geometry column to readable WKT for the first 8 cities",
+                    icon: rsx! { Icon { width: 12, height: 12, icon: FaFont, class: "btn-icon".to_string() } },
+                    on_pick: move |_| {
+                        let new_sql = PRESET_ASTEXT.to_string();
+                        sql.set(new_sql.clone());
+                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
+                    },
+                }
+                PresetChip {
+                    label: "RTree",
+                    description: "Same KNN result, but with an explicit JOIN against the R-tree shadow table so the SQLite virtual-table index actually drives the prefilter",
+                    icon: rsx! { Icon { width: 12, height: 12, icon: FaSitemap, class: "btn-icon".to_string() } },
+                    on_pick: move |_| {
+                        let new_sql = PRESET_RTREE.to_string();
+                        sql.set(new_sql.clone());
+                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
+                    },
+                }
+                PresetChip {
+                    label: "Explain",
+                    description: "Show the query plan SQLite picks for an R-tree-backed lookup, useful to confirm the virtual table is in use",
+                    icon: rsx! { Icon { width: 12, height: 12, icon: FaMagnifyingGlass, class: "btn-icon".to_string() } },
+                    on_pick: move |_| {
+                        let new_sql = PRESET_EXPLAIN.to_string();
+                        sql.set(new_sql.clone());
+                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
+                    },
+                }
+                PresetChip {
+                    label: "Countries",
+                    description: "Group cities within 3000 km of the probe by country and rank by city count and total population",
+                    icon: rsx! { Icon { width: 12, height: 12, icon: FaFlag, class: "btn-icon".to_string() } },
+                    on_pick: move |_| {
+                        let new_sql = PRESET_COUNTRIES.to_string();
+                        sql.set(new_sql.clone());
+                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
+                    },
+                }
+                PresetChip {
+                    label: "Rings",
+                    description: "Aggregate city counts and total population into concentric distance bands around the probe",
+                    icon: rsx! { Icon { width: 12, height: 12, icon: FaCircleDot, class: "btn-icon".to_string() } },
+                    on_pick: move |_| {
+                        let new_sql = PRESET_RINGS.to_string();
+                        sql.set(new_sql.clone());
+                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
+                    },
+                }
+                PresetChip {
+                    label: "GeoJSON",
+                    description: "Serialize the top 5 most populous cities as GeoJSON Point features",
+                    icon: rsx! { Icon { width: 12, height: 12, icon: FaFileCode, class: "btn-icon".to_string() } },
+                    on_pick: move |_| {
+                        let new_sql = PRESET_GEOJSON.to_string();
+                        sql.set(new_sql.clone());
+                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
+                    },
                 }
             }
             CodeEditor {

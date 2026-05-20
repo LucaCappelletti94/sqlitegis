@@ -90,7 +90,7 @@ fn wkb_has_z_or_m(raw_type: u32) -> (bool, bool) {
     }
 }
 
-// -- Deserialization helpers ---------------------------------------------------
+// Deserialization helpers
 
 /// Parse WKT (optionally with an SRID) into an EWKB blob.
 ///
@@ -177,7 +177,7 @@ pub fn geom_from_geojson(json: &str, srid: Option<i32>) -> Result<Vec<u8>> {
     }
 }
 
-// -- Serialization helpers -----------------------------------------------------
+// Serialization helpers
 
 /// Convert an EWKB blob to WKT text.
 ///
@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn geom_from_geojson_rejects_non_object_json() {
-        // Valid JSON, but not an Object -- exercises the `Value::Object` else-arm
+        // Valid JSON, but not an Object. Exercises the `Value::Object` else-arm
         // inside `is_empty_point_geojson`.
         let err = geom_from_geojson("[1,2,3]", None).expect_err("array json must error");
         assert!(matches!(err, SqliteGisError::Geozero(_)));

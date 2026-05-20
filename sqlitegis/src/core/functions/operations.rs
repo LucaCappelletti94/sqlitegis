@@ -34,7 +34,7 @@ where
     write_ewkb(&Geometry::MultiPolygon(result), srid)
 }
 
-/// ST_Union -- compute the geometric union of two polygon geometries.
+/// ST_Union: compute the geometric union of two polygon geometries.
 ///
 /// # Example
 ///
@@ -52,7 +52,7 @@ pub fn st_union(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
     binary_polygon_op(a, b, |ma, mb| ma.union(mb))
 }
 
-/// ST_Intersection -- compute the geometric intersection of two polygon geometries.
+/// ST_Intersection: compute the geometric intersection of two polygon geometries.
 ///
 /// # Example
 ///
@@ -70,7 +70,7 @@ pub fn st_intersection(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
     binary_polygon_op(a, b, |ma, mb| ma.intersection(mb))
 }
 
-/// ST_Difference -- compute the geometric difference (A minus B) of two polygon geometries.
+/// ST_Difference: compute the geometric difference (A minus B) of two polygon geometries.
 ///
 /// # Example
 ///
@@ -88,7 +88,7 @@ pub fn st_difference(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
     binary_polygon_op(a, b, |ma, mb| ma.difference(mb))
 }
 
-/// ST_SymDifference -- compute the symmetric difference (XOR) of two polygon geometries.
+/// ST_SymDifference: compute the symmetric difference (XOR) of two polygon geometries.
 ///
 /// # Example
 ///
@@ -106,7 +106,7 @@ pub fn st_sym_difference(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
     binary_polygon_op(a, b, |ma, mb| ma.xor(mb))
 }
 
-/// ST_Buffer -- expand or shrink a geometry by a given distance.
+/// ST_Buffer: expand or shrink a geometry by a given distance.
 ///
 /// # Example
 ///

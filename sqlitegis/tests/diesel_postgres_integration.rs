@@ -20,7 +20,7 @@ diesel::table! {
     }
 }
 
-// -- Helper: start a PostGIS container and return (container, connection) ------
+// Helper: start a PostGIS container and return (container, connection)
 
 async fn pg_conn(
     tag: &str,
@@ -61,7 +61,7 @@ async fn pg_conn(
 
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
-    // PostGIS needs a moment; retry connection a few times.
+    // PostGIS needs a moment, so retry connection a few times.
     let mut conn = None;
     for _ in 0..30 {
         match PgConnection::establish(&url) {
@@ -119,7 +119,7 @@ fn geometry_samples() -> Vec<(&'static str, geo::Geometry<f64>)> {
     ]
 }
 
-// -- Test macro: generate a module per PG version -----------------------------
+// Test macro: generate a module per PG version
 
 macro_rules! postgis_tests {
     ($mod_name:ident, $tag:expr) => {
@@ -134,7 +134,7 @@ macro_rules! postgis_tests {
                 let mut id = 1;
 
                 for (type_name, geom) in geometry_samples() {
-                    // geo::Geometry<f64> roundtrip -- Geometry
+                    // geo::Geometry<f64> roundtrip: Geometry
                     diesel::insert_into(t::table)
                         .values((t::id.eq(id), t::geom.eq(Some(geom.clone()))))
                         .execute(&mut c)
@@ -160,7 +160,7 @@ macro_rules! postgis_tests {
                     );
                     id += 1;
 
-                    // geo::Geometry<f64> roundtrip -- Geography
+                    // geo::Geometry<f64> roundtrip: Geography
                     diesel::insert_into(t::table)
                         .values((t::id.eq(id), t::geog.eq(Some(geom.clone()))))
                         .execute(&mut c)
@@ -190,7 +190,7 @@ macro_rules! postgis_tests {
                     );
                     id += 1;
 
-                    // Vec<u8> EWKB roundtrip -- Geometry
+                    // Vec<u8> EWKB roundtrip: Geometry
                     let ewkb = sqlitegis::core::ewkb::write_ewkb(&geom, None).unwrap();
                     diesel::insert_into(t::table)
                         .values((t::id.eq(id), t::geom.eq(Some(ewkb.clone()))))
@@ -206,7 +206,7 @@ macro_rules! postgis_tests {
                     );
                     id += 1;
 
-                    // Vec<u8> EWKB roundtrip -- Geography
+                    // Vec<u8> EWKB roundtrip: Geography
                     let ewkb_geog = sqlitegis::core::ewkb::write_ewkb(&geom, Some(4326)).unwrap();
                     diesel::insert_into(t::table)
                         .values((t::id.eq(id), t::geog.eq(Some(ewkb_geog.clone()))))
@@ -222,7 +222,7 @@ macro_rules! postgis_tests {
                     );
                     id += 1;
 
-                    // [u8] slice ToSql -- Geometry
+                    // [u8] slice ToSql: Geometry
                     diesel::insert_into(t::table)
                         .values((t::id.eq(id), t::geom.eq(Some(&ewkb[..]))))
                         .execute(&mut c)
@@ -410,7 +410,7 @@ macro_rules! postgis_tests {
             async fn postgis_spatial_operations() {
                 let (_container, mut c) = pg_conn($tag).await;
 
-                // ST_Union -- area should be 7.0 (4 + 4 - 1 overlap)
+                // ST_Union: area should be 7.0 (4 + 4 - 1 overlap)
                 let union_area: Option<f64> = diesel::dsl::select(st_area(st_union(
                     st_geomfromtext("POLYGON((0 0,2 0,2 2,0 2,0 0))"),
                     st_geomfromtext("POLYGON((1 1,3 1,3 3,1 3,1 1))"),
@@ -419,7 +419,7 @@ macro_rules! postgis_tests {
                 .unwrap();
                 assert!((union_area.unwrap() - 7.0).abs() < 1e-10);
 
-                // ST_Intersection -- area should be 1.0
+                // ST_Intersection: area should be 1.0
                 let intersection_area: Option<f64> = diesel::dsl::select(st_area(st_intersection(
                     st_geomfromtext("POLYGON((0 0,2 0,2 2,0 2,0 0))"),
                     st_geomfromtext("POLYGON((1 1,3 1,3 3,1 3,1 1))"),

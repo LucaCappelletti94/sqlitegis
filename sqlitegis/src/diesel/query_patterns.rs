@@ -1,6 +1,6 @@
 //! # Index-Aware Spatial Query Patterns
 //!
-//! SQLite R-tree indexes require **explicit JOINs** -- unlike PostGIS where GiST
+//! SQLite R-tree indexes require **explicit JOINs**, unlike PostGIS where GiST
 //! indexes are used transparently by the query planner. This module documents
 //! copy-pasteable SQL templates and [`diesel::sql_query`] examples for every
 //! common spatial query pattern.
@@ -24,9 +24,9 @@
 //!
 //! Every spatial query follows a **two-stage** pattern:
 //!
-//! 1. **PREFILTER** -- JOIN against the R-tree to narrow candidates using
+//! 1. **PREFILTER**: JOIN against the R-tree to narrow candidates using
 //!    bounding-box overlap. This is O(log N).
-//! 2. **REFINEMENT** -- apply the exact spatial predicate (e.g., `ST_Intersects`)
+//! 2. **REFINEMENT**: apply the exact spatial predicate (e.g., `ST_Intersects`)
 //!    on the remaining candidates.
 //!
 //! ## R-tree Float Precision
@@ -153,7 +153,7 @@
 //! ### Notes
 //!
 //! - `ST_Within(A, B)` returns true when A is completely inside B (boundary
-//!   touching counts as NOT within in the strict DE-9IM sense -- use
+//!   touching counts as NOT within in the strict DE-9IM sense. Use
 //!   `ST_CoveredBy` if you want boundary-inclusive semantics).
 //! - The prefilter envelope should be the **search polygon's** bounding box,
 //!   not the candidate's.
@@ -217,7 +217,7 @@
 //! ### Notes
 //!
 //! - The R-tree prefilter checks that the point falls inside each candidate's
-//!   bounding box -- this is a very tight filter for convex polygons.
+//!   bounding box. This is a very tight filter for convex polygons.
 //! - For multipolygons or concave shapes, the refinement step eliminates
 //!   false positives from bbox-only matching.
 //!
@@ -508,7 +508,7 @@
 //!
 //! - Use `ST_DistanceSpheroid` for ellipsoidal accuracy instead of
 //!   `ST_DistanceSphere` (Haversine).
-//! - The degree-offset bbox is intentionally conservative -- it may include
+//! - The degree-offset bbox is intentionally conservative. It may include
 //!   candidates outside the true geodesic circle, but the `ORDER BY`
 //!   ensures correct ranking.
 //!
@@ -519,7 +519,7 @@
 //! **Use case:** KNN search in sparse or unevenly distributed data where the
 //! initial search box may not contain enough results.
 //!
-//! This is an **application-level** retry pattern -- no SQL changes needed.
+//! This is an **application-level** retry pattern with no SQL changes needed.
 //!
 //! ### Algorithm
 //!
@@ -605,12 +605,12 @@
 //! ## Type-Aware Index Strategy: Research Findings
 //!
 //! **Question:** Does separating geometries by type (Point vs. LineString
-//! vs. Polygon) into distinct tables -- each with its own R-tree -- improve
+//! vs. Polygon) into distinct tables, each with its own R-tree, improve
 //! query performance compared to a single mixed-type table with one R-tree?
 //!
 //! ### Benchmark Setup
 //!
-//! - **Mixed table:** 10,000 rows -- 7,000 Points + 2,000 LineStrings +
+//! - **Mixed table:** 10,000 rows. 7,000 Points + 2,000 LineStrings +
 //!   1,000 Polygons, all with spatial index.
 //! - **Homogeneous tables:** 7,000 Points (separate table + index) and
 //!   1,000 Polygons (separate table + index).
@@ -627,12 +627,12 @@
 //!
 //! ### Conclusions
 //!
-//! 1. **Overhead is only 1.3-1.4x** -- mostly due to the R-tree being
+//! 1. **Overhead is only 1.3-1.4x**, mostly due to the R-tree being
 //!    larger (10K vs. 7K/1K entries), not type mismatch.
-//! 2. **Adding `ST_GeometryType()` filter is counterproductive** -- the
+//! 2. **Adding `ST_GeometryType()` filter is counterproductive**: the
 //!    type-check cost exceeds the savings from skipping predicates on
 //!    wrong-type geometries.
-//! 3. **The R-tree prefilter is highly selective** -- after bbox narrowing,
+//! 3. **The R-tree prefilter is highly selective**: after bbox narrowing,
 //!    only a small number of candidates reach the refinement step. Running
 //!    `ST_Contains` or `ST_Intersects` on a few extra non-matching
 //!    geometries is negligible.

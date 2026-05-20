@@ -66,10 +66,10 @@ use crate::diesel::types::Geometry;
 /// `SqlType = Nullable<Geometry>`. Each method delegates to the corresponding
 /// free function in [`crate::diesel::functions`].
 ///
-/// For non-nullable `Geometry` columns, call `.nullable()` first -- this is
+/// For non-nullable `Geometry` columns, call `.nullable()` first. This is
 /// the standard Diesel pattern.
 pub trait GeometryExpressionMethods: Expression<SqlType = Nullable<Geometry>> + Sized {
-    // -- I/O -------------------------------------------------------------
+    // I/O
 
     /// Serialize this geometry to WKT text.
     fn st_astext(self) -> functions::st_astext<Self> {
@@ -96,7 +96,7 @@ pub trait GeometryExpressionMethods: Expression<SqlType = Nullable<Geometry>> + 
         functions::st_asgeojson(self)
     }
 
-    // -- Constructors / transforms ---------------------------------------
+    // Constructors / transforms
 
     /// Construct a LineString from this geometry and another Point geometry.
     fn st_makeline<T>(self, other: T) -> functions::st_makeline<Self, T>
@@ -119,7 +119,7 @@ pub trait GeometryExpressionMethods: Expression<SqlType = Nullable<Geometry>> + 
         functions::st_collect(self, other)
     }
 
-    // -- Accessors -------------------------------------------------------
+    // Accessors
 
     /// Return the SRID embedded in the geometry EWKB header.
     fn st_srid(self) -> functions::st_srid<Self> {
@@ -288,7 +288,7 @@ pub trait GeometryExpressionMethods: Expression<SqlType = Nullable<Geometry>> + 
         functions::st_ymax(self)
     }
 
-    // -- Measurement -----------------------------------------------------
+    // Measurement
 
     /// Return the planar area of a polygon geometry.
     fn st_area(self) -> functions::st_area<Self> {
@@ -357,7 +357,7 @@ pub trait GeometryExpressionMethods: Expression<SqlType = Nullable<Geometry>> + 
         functions::st_pointonsurface(self)
     }
 
-    // -- Operations ------------------------------------------------------
+    // Operations
 
     /// Compute the geometric union of this geometry with another.
     fn st_union<T>(self, other: T) -> functions::st_union<Self, T>
@@ -399,7 +399,7 @@ pub trait GeometryExpressionMethods: Expression<SqlType = Nullable<Geometry>> + 
         functions::st_buffer(self, distance)
     }
 
-    // -- Predicates ------------------------------------------------------
+    // Predicates
 
     /// Return whether this geometry shares any interior or boundary points with another.
     fn st_intersects<T>(self, other: T) -> functions::st_intersects<Self, T>
@@ -559,7 +559,7 @@ pub trait GeometryExpressionMethods: Expression<SqlType = Nullable<Geometry>> + 
         functions::st_relate_match_geoms(self, other, pattern)
     }
 
-    // -- Geography variants ----------------------------------------------
+    // Geography variants
 
     /// Haversine arc length of a linestring in metres.
     fn st_lengthsphere(self) -> functions::st_lengthsphere<Self> {

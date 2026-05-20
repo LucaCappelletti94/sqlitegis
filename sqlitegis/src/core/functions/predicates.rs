@@ -12,7 +12,7 @@ use geo::dimensions::Dimensions;
 use crate::core::error::{Result, SqliteGisError};
 use crate::core::ewkb::parse_ewkb_pair;
 
-/// ST_Intersects -- true if the two geometries share at least one point.
+/// ST_Intersects: true if the two geometries share at least one point.
 ///
 /// # Example
 ///
@@ -29,7 +29,7 @@ pub fn st_intersects(a: &[u8], b: &[u8]) -> Result<bool> {
     Ok(ga.intersects(&gb))
 }
 
-/// ST_Contains -- true if A completely contains B (B's boundary subset of A's interior).
+/// ST_Contains: true if A completely contains B (B's boundary subset of A's interior).
 ///
 /// # Example
 ///
@@ -46,7 +46,7 @@ pub fn st_contains(a: &[u8], b: &[u8]) -> Result<bool> {
     Ok(ga.contains(&gb))
 }
 
-/// ST_Within -- true if A is completely inside B.
+/// ST_Within: true if A is completely inside B.
 ///
 /// # Example
 ///
@@ -62,7 +62,7 @@ pub fn st_within(a: &[u8], b: &[u8]) -> Result<bool> {
     st_contains(b, a)
 }
 
-/// ST_Disjoint -- true if the two geometries share no points.
+/// ST_Disjoint: true if the two geometries share no points.
 ///
 /// # Example
 ///
@@ -78,7 +78,7 @@ pub fn st_disjoint(a: &[u8], b: &[u8]) -> Result<bool> {
     Ok(!st_intersects(a, b)?)
 }
 
-/// ST_DWithin -- true if the geometries are within `distance` of each other (Euclidean).
+/// ST_DWithin: true if the geometries are within `distance` of each other (Euclidean).
 ///
 /// # Example
 ///
@@ -106,7 +106,7 @@ pub fn st_dwithin(a: &[u8], b: &[u8], distance: f64) -> Result<bool> {
     Ok(st_distance(a, b)? <= distance)
 }
 
-/// ST_DWithinSphere -- true if two geographic points are within `distance` metres
+/// ST_DWithinSphere: true if two geographic points are within `distance` metres
 /// using Haversine (spherical) distance (requires SRID 4326).
 ///
 /// # Example
@@ -135,7 +135,7 @@ pub fn st_dwithin_sphere(a: &[u8], b: &[u8], distance: f64) -> Result<bool> {
     Ok(st_distance_sphere(a, b)? <= distance)
 }
 
-/// ST_DWithinSpheroid -- true if two geographic points are within `distance` metres
+/// ST_DWithinSpheroid: true if two geographic points are within `distance` metres
 /// using geodesic (spheroid) distance (requires SRID 4326).
 ///
 /// # Example
@@ -164,7 +164,7 @@ pub fn st_dwithin_spheroid(a: &[u8], b: &[u8], distance: f64) -> Result<bool> {
     Ok(st_distance_spheroid(a, b)? <= distance)
 }
 
-/// ST_Covers -- A covers B (B has no point outside A).
+/// ST_Covers: A covers B (B has no point outside A).
 ///
 /// # Example
 ///
@@ -181,7 +181,7 @@ pub fn st_covers(a: &[u8], b: &[u8]) -> Result<bool> {
     Ok(ga.relate(&gb).is_covers())
 }
 
-/// ST_CoveredBy -- B covers A.
+/// ST_CoveredBy: B covers A.
 ///
 /// # Example
 ///
@@ -197,7 +197,7 @@ pub fn st_covered_by(a: &[u8], b: &[u8]) -> Result<bool> {
     st_covers(b, a)
 }
 
-/// ST_Equals -- geometrically equal (same point set, ignoring vertex order).
+/// ST_Equals: geometrically equal (same point set, ignoring vertex order).
 ///
 /// # Example
 ///
@@ -214,7 +214,7 @@ pub fn st_equals(a: &[u8], b: &[u8]) -> Result<bool> {
     Ok(ga.relate(&gb).is_equal_topo())
 }
 
-/// ST_Touches -- geometries share boundary points but not interior points.
+/// ST_Touches: geometries share boundary points but not interior points.
 ///
 /// # Example
 ///
@@ -232,7 +232,7 @@ pub fn st_touches(a: &[u8], b: &[u8]) -> Result<bool> {
     Ok(ga.relate(&gb).is_touches())
 }
 
-/// ST_Crosses -- geometries have some interior points in common but not all.
+/// ST_Crosses: geometries have some interior points in common but not all.
 ///
 /// # Example
 ///
@@ -249,7 +249,7 @@ pub fn st_crosses(a: &[u8], b: &[u8]) -> Result<bool> {
     Ok(ga.relate(&gb).is_crosses())
 }
 
-/// ST_Overlaps -- geometries overlap (same dimension, share interior, neither contains the other).
+/// ST_Overlaps: geometries overlap (same dimension, share interior, neither contains the other).
 ///
 /// # Example
 ///
@@ -288,7 +288,7 @@ fn matrix_string(matrix: &geo::algorithm::relate::IntersectionMatrix) -> String 
     s
 }
 
-/// ST_Relate -- return the DE-9IM matrix string (e.g. "FF2FF1212").
+/// ST_Relate: return the DE-9IM matrix string (e.g. "FF2FF1212").
 ///
 /// # Example
 ///
@@ -307,7 +307,7 @@ pub fn st_relate(a: &[u8], b: &[u8]) -> Result<String> {
     Ok(matrix_string(&ga.relate(&gb)))
 }
 
-/// ST_Relate (pattern) -- check a DE-9IM pattern string against two geometries.
+/// ST_Relate (pattern): check a DE-9IM pattern string against two geometries.
 ///
 /// # Example
 ///
@@ -322,13 +322,13 @@ pub fn st_relate(a: &[u8], b: &[u8]) -> Result<String> {
 /// ```
 pub fn st_relate_match_geoms(a: &[u8], b: &[u8], pattern: &str) -> Result<bool> {
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    // Use geo's built-in pattern matching; this validates `pattern`.
+    // Use geo's built-in pattern matching, which validates `pattern`.
     ga.relate(&gb)
         .matches(pattern)
         .map_err(|e| SqliteGisError::InvalidInput(format!("invalid DE-9IM pattern: {e}")))
 }
 
-/// ST_RelateMatch -- match a DE-9IM matrix string against a pattern string.
+/// ST_RelateMatch: match a DE-9IM matrix string against a pattern string.
 ///
 /// # Example
 ///
