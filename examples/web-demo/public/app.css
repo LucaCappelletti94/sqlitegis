@@ -236,17 +236,19 @@ header .intro a:focus {
 /* Brand colours for inline name mentions. SQLiteGIS itself gets the
    SQLite logo blue (the project's own primary accent). Each ecosystem
    link picks up its own canonical hex so the prose reads as a small
-   colour legend for the stack. */
-.brand-sqlitegis {
+   colour legend for the stack. The `header .intro` ancestor prefix is
+   needed to beat `header .intro a { color: var(--accent) }` on
+   specificity (without it, every link stays accent-coloured). */
+header .intro .brand-sqlitegis {
     color: var(--accent);
     font-weight: 600;
 }
 
-.brand-sqlite { color: #057DBE; }
-.brand-postgis { color: #336791; }
-.brand-rust { color: #B7410E; }
-.brand-diesel { color: #A82F47; }
-.brand-wasm { color: #654FF0; }
+header .intro a.brand-sqlite { color: #057DBE; }
+header .intro a.brand-postgis { color: #336791; }
+header .intro a.brand-rust { color: #B7410E; }
+header .intro a.brand-diesel { color: #A82F47; }
+header .intro a.brand-wasm { color: #654FF0; }
 
 /* GitHub / docs.rs / crates.io as small icon-and-label badges sitting
    next to the tagline. Soft accent background, accent text and icon,
