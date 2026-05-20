@@ -268,6 +268,24 @@ textarea:not(.dxc-editor-input):focus {
     caret-color: var(--fg) !important;
 }
 
+/* Make the code editor blend into its panel: drop the Tokyo Night navy
+   background in favour of the panel colour, and kill the focus-within
+   glow that the library applies by default. The double-class selector
+   beats the library's own `.dxc-tokyo-night` definition, which is loaded
+   after app.css and otherwise wins the cascade at equal specificity. */
+.dxc-editor.dxc-tokyo-night {
+    --dxc-light-background: var(--bg-panel);
+    --dxc-editor-focus-ring: none;
+}
+
+/* The library defaults to 14px top padding on both the gutter and the
+   highlight/input layers. Drop the top so the first line sits flush
+   against the panel header. */
+.dxc-editor.editor {
+    --dxc-editor-padding: 0 18px 14px 0;
+    --dxc-editor-gutter-padding: 0 0 14px 0;
+}
+
 button {
     background: var(--accent);
     color: #0a1410;

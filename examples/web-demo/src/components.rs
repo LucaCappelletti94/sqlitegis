@@ -73,41 +73,50 @@ pub fn SchemaPanel(on_reset: EventHandler<Result<(), String>>) -> Element {
 }
 
 const PRESET_KNN: &str = "\
--- 10 nearest cities by geodesic distance. lon/lat drive the map highlight.
+-- Nearest cities by geodesic distance from the probe lon/lat.
 SELECT name, country, population,
-       ROUND(ST_DistanceSphere(geom, ST_Point(:lon, :lat, 4326)) / 1000.0, 1) AS km,
-       ST_X(geom) AS lon, ST_Y(geom) AS lat
-FROM places ORDER BY km LIMIT 10;";
+  ROUND(ST_DistanceSphere(geom, ST_Point(:lon, :lat, 4326))/1000.0,
+        1) AS km,
+  ST_X(geom) AS lon, ST_Y(geom) AS lat
+FROM places
+ORDER BY km LIMIT 100;";
 
 const PRESET_RADIUS: &str = "\
--- Cities within 200 km of your location.
-SELECT name, country, population, ST_X(geom) AS lon, ST_Y(geom) AS lat
+-- Cities within 2000 km of your location.
+SELECT name, country, population,
+  ST_X(geom) AS lon, ST_Y(geom) AS lat
 FROM places
-WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 200000.0)
+WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 2000000.0)
 ORDER BY population DESC;";
 
 const PRESET_ENVELOPE: &str = "\
--- Cities inside a 10x10 degree box centered on the probe point.
-SELECT name, country, population, ST_X(geom) AS lon, ST_Y(geom) AS lat
+-- Cities inside a 30x30 degree box centered on the probe point.
+SELECT name, country, population,
+  ST_X(geom) AS lon, ST_Y(geom) AS lat
 FROM places
-WHERE ST_Intersects(geom, ST_MakeEnvelope(:lon - 5.0, :lat - 5.0, :lon + 5.0, :lat + 5.0, 4326))
-ORDER BY population DESC LIMIT 200;";
+WHERE ST_Intersects(geom, ST_MakeEnvelope(
+  :lon - 15.0, :lat - 15.0, :lon + 15.0, :lat + 15.0, 4326
+))
+ORDER BY population DESC LIMIT 500;";
 
 const PRESET_ASTEXT: &str = "\
 -- Round-trip: BLOB geometry to human-readable WKT.
-SELECT name, ST_AsText(geom) AS wkt FROM places ORDER BY name LIMIT 8;";
+SELECT name, ST_AsText(geom) AS wkt
+FROM places
+ORDER BY name LIMIT 100;";
 
 const PRESET_RTREE: &str = "\
--- 10 nearest cities via explicit R-tree prefilter then geodesic refinement.
--- The JOIN against places_geom_rtree narrows candidates by bounding box in
--- O(log N); ST_DistanceSphere then refines to the true geodesic order.
+-- Nearest cities via R-tree prefilter then geodesic refinement.
+-- The JOIN against places_geom_rtree narrows by bounding box in
+-- O(log N). ST_DistanceSphere then refines to true geodesic order.
 SELECT p.name, p.country, p.population,
-       ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) / 1000.0, 1) AS km,
-       ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
+  ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326))/1000.0,
+        1) AS km,
+  ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
 FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
 WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
   AND r.ymax >= :lat - 10 AND r.ymin <= :lat + 10
-ORDER BY km LIMIT 10;";
+ORDER BY km LIMIT 100;";
 
 const PRESET_EXPLAIN: &str = "\
 -- See how SQLite plans the index-aware lookup. Look for
@@ -119,35 +128,36 @@ WHERE r.xmax >= :lon - 5 AND r.xmin <= :lon + 5
   AND r.ymax >= :lat - 5 AND r.ymin <= :lat + 5;";
 
 const PRESET_COUNTRIES: &str = "\
--- Top 10 countries by city count within 1000 km of the probe.
+-- Top countries by city count within 3000 km of the probe.
 SELECT country, COUNT(*) AS cities, SUM(population) AS total_pop
 FROM places
-WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 1000000.0)
+WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 3000000.0)
 GROUP BY country
-ORDER BY cities DESC LIMIT 10;";
+ORDER BY cities DESC LIMIT 100;";
 
 const PRESET_RINGS: &str = "\
--- Population in concentric distance rings around the probe (up to 750 km).
+-- Population in concentric rings around the probe (up to 3000 km).
 SELECT
   CASE
-    WHEN d <= 100000  THEN '0-100 km'
-    WHEN d <= 250000  THEN '100-250 km'
-    WHEN d <= 500000  THEN '250-500 km'
-    ELSE                   '500-750 km'
+    WHEN d <=  500000 THEN '0-500 km'
+    WHEN d <= 1000000 THEN '500-1000 km'
+    WHEN d <= 2000000 THEN '1000-2000 km'
+    ELSE                   '2000-3000 km'
   END AS ring,
-  COUNT(*) AS cities,
-  SUM(population) AS total_pop
+  COUNT(*) AS cities, SUM(population) AS total_pop
 FROM (
-  SELECT population, ST_DistanceSphere(geom, ST_Point(:lon, :lat, 4326)) AS d
+  SELECT population,
+    ST_DistanceSphere(geom, ST_Point(:lon, :lat, 4326)) AS d
   FROM places
-  WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 750000.0)
+  WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 3000000.0)
 )
 GROUP BY ring ORDER BY MIN(d);";
 
 const PRESET_GEOJSON: &str = "\
--- Serialize geometries to GeoJSON, ready to drop into Leaflet or Mapbox.
+-- Serialize geometries to GeoJSON, ready for Leaflet or Mapbox.
 SELECT name, country, ST_AsGeoJSON(geom) AS geojson
-FROM places ORDER BY population DESC LIMIT 5;";
+FROM places
+ORDER BY population DESC LIMIT 100;";
 
 #[component]
 pub fn QueryPanel(
@@ -193,7 +203,7 @@ pub fn QueryPanel(
                         }
                         PresetChip {
                             label: "Radius",
-                            description: "List every city within 200 km of the probe point, sorted by population",
+                            description: "List every city within 2000 km of the probe point, sorted by population",
                             icon: rsx! { Icon { width: 12, height: 12, icon: FaCompass, class: "btn-icon".to_string() } },
                             on_pick: move |_| {
                                 let new_sql = PRESET_RADIUS.to_string();
@@ -203,7 +213,7 @@ pub fn QueryPanel(
                         }
                         PresetChip {
                             label: "BBOX",
-                            description: "List cities inside a 10 by 10 degree box centered on the probe point, top 200 by population",
+                            description: "List cities inside a 30 by 30 degree box centered on the probe point, top 500 by population",
                             icon: rsx! { Icon { width: 12, height: 12, icon: FaVectorSquare, class: "btn-icon".to_string() } },
                             on_pick: move |_| {
                                 let new_sql = PRESET_ENVELOPE.to_string();
@@ -243,7 +253,7 @@ pub fn QueryPanel(
                         }
                         PresetChip {
                             label: "Countries",
-                            description: "Group cities within 1000 km of the probe by country and rank by city count and total population",
+                            description: "Group cities within 3000 km of the probe by country and rank by city count and total population",
                             icon: rsx! { Icon { width: 12, height: 12, icon: FaFlag, class: "btn-icon".to_string() } },
                             on_pick: move |_| {
                                 let new_sql = PRESET_COUNTRIES.to_string();
