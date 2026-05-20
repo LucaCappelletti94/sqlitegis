@@ -66,8 +66,8 @@ Criterion central estimates on the included R-tree workloads:
 
 | Scenario | Indexed | Non-indexed | Speedup |
 | --- | ---: | ---: | ---: |
-| `intersects_window` | `156 us` | `9.36 ms` | `~60x` |
-| `knn` | `84 us` | `5.41 ms` | `~64x` |
+| `intersects_window` | `178 us` | `9.81 ms` | `~55x` |
+| `knn` | `89 us` | `5.66 ms` | `~64x` |
 
 ## Contributing
 
