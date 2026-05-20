@@ -23,7 +23,7 @@ defaults:
 
 jobs:
   hooks:
-    name: Hook Checks
+    name: prek run --all-files
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -32,7 +32,9 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: cargo run -p xtask -- precommit
+      - name: Install prek
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/j178/prek/releases/latest/download/prek-installer.sh | sh
+      - run: prek run --all-files
 
   fmt:
     name: Rustfmt

@@ -91,6 +91,21 @@ Geodesic and spherical functions (`ST_DistanceSphere`, `ST_DistanceSpheroid`, `S
 cargo doc -p geolite --all-features --no-deps --open
 ```
 
+## Development
+
+Local checks are driven by [`prek`](https://github.com/j178/prek), a Rust reimplementation of the `pre-commit` framework. Configuration lives in `prek.toml` at the repo root.
+
+```sh
+# Once, per checkout:
+prek install
+
+# Run the same checks CI runs (fmt + clippy + workspace tests + doctests):
+prek run --all-files
+
+# Run the expensive hooks (Postgres via testcontainers, WASM target):
+prek run --stage manual --all-files
+```
+
 ## Benchmarks
 
 Run the Criterion suite with:

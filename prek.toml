@@ -1,0 +1,92 @@
+# Configuration file for `prek` (https://github.com/j178/prek).
+#:schema https://www.schemastore.org/prek.json
+#
+# One-time setup per checkout:
+#   prek install
+#
+# Run the full default suite locally:
+#   prek run --all-files
+#
+# Run the expensive hooks (Postgres via testcontainers, WASM target):
+#   prek run --stage manual --all-files
+
+[[repos]]
+repo = "local"
+hooks = [
+    { id = "cargo-fmt",
+      name = "cargo fmt --check",
+      entry = "cargo fmt --all -- --check",
+      language = "system",
+      types = ["rust"],
+      pass_filenames = false },
+
+    { id = "cargo-clippy",
+      name = "cargo clippy (workspace)",
+      entry = "cargo clippy --workspace --all-targets -- -D warnings",
+      language = "system",
+      types = ["rust"],
+      pass_filenames = false },
+
+    { id = "cargo-clippy-all-features",
+      name = "cargo clippy (workspace, all-features)",
+      entry = "cargo clippy --workspace --all-features --all-targets -- -D warnings",
+      language = "system",
+      types = ["rust"],
+      pass_filenames = false },
+
+    { id = "cargo-test",
+      name = "cargo test (workspace)",
+      entry = "cargo test --workspace",
+      language = "system",
+      types = ["rust"],
+      pass_filenames = false },
+
+    { id = "cargo-test-sqlite-extension",
+      name = "cargo test (sqlite-extension symbol)",
+      entry = "cargo test -p geolite --features sqlite-extension --test sqlite_integration",
+      language = "system",
+      types = ["rust"],
+      pass_filenames = false },
+
+    { id = "cargo-test-doc",
+      name = "cargo test --doc (workspace)",
+      entry = "cargo test --doc --workspace",
+      language = "system",
+      types = ["rust"],
+      pass_filenames = false },
+
+    # Manual-stage hooks. Expensive (Docker for Postgres, wasm32 target).
+    # Run them explicitly with `prek run --stage manual --all-files`.
+
+    { id = "cargo-test-postgres",
+      name = "cargo test (diesel-postgres via testcontainers)",
+      entry = "cargo test -p geolite --features diesel-postgres --test diesel_postgres_integration",
+      language = "system",
+      types = ["rust"],
+      pass_filenames = false,
+      stages = ["manual"] },
+
+    { id = "cargo-test-wasm-sqlite",
+      name = "cargo test (wasm32 sqlite)",
+      entry = "cargo test -p geolite --features sqlite --target wasm32-unknown-unknown --test sqlite_wasm",
+      language = "system",
+      types = ["rust"],
+      pass_filenames = false,
+      stages = ["manual"] },
+
+    { id = "cargo-test-wasm-diesel",
+      name = "cargo test (wasm32 diesel-sqlite)",
+      entry = "cargo test -p geolite --features diesel-sqlite --target wasm32-unknown-unknown --test diesel_wasm_integration",
+      language = "system",
+      types = ["rust"],
+      pass_filenames = false,
+      stages = ["manual"] },
+
+    { id = "cargo-clippy-wasm",
+      name = "cargo clippy (wasm32)",
+      entry = "cargo clippy -p geolite --features sqlite --target wasm32-unknown-unknown -- -D warnings",
+      language = "system",
+      types = ["rust"],
+      pass_filenames = false,
+      stages = ["manual"] },
+]

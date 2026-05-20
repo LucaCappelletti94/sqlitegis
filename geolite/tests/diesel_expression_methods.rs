@@ -9,7 +9,7 @@ use geolite::core::function_catalog::SQLITE_DETERMINISTIC_FUNCTIONS;
 use geolite::diesel::prelude::*;
 use std::collections::BTreeSet;
 
-const DIESEL_FUNCTIONS_SRC: &str = include_str!("../src/diesel/generated/functions.rs");
+const DIESEL_FUNCTIONS_SRC: &str = include_str!("../src/diesel/functions.rs");
 
 /// Geometry literal helper (not Clone, so create fresh each time via macro).
 macro_rules! g {

@@ -1736,8 +1736,8 @@ macro_rules! callback_spec {
     };
 }
 
-include!("generated/deterministic_callbacks.rs");
-include!("generated/direct_only_callbacks.rs");
+include!("deterministic_callbacks.rs");
+include!("direct_only_callbacks.rs");
 
 const fn const_str_eq(a: &str, b: &str) -> bool {
     let a_bytes = a.as_bytes();

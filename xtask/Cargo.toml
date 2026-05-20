@@ -1,9 +1,0 @@
-[package]
-name = "xtask"
-version = "0.1.0"
-edition = "2021"
-rust-version.workspace = true
-publish = false
-
-[dependencies]
-geolite = { path = "../geolite", default-features = false }
