@@ -5,24 +5,10 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.86-blue)](https://github.com/LucaCappelletti94/sqlitegis)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/LucaCappelletti94/sqlitegis/blob/main/LICENSE)
 
-PostGIS-style spatial functions for SQLite in pure Rust. Ships as a SQLite loadable extension (native + WASM) and as a Diesel ORM integration. Geometries are stored as EWKB BLOBs, matching the PostGIS wire format. Everything lives in a single crate behind feature flags.
+PostGIS-style spatial functions for SQLite in pure Rust. Ships as a SQLite loadable extension (native + WASM) and as a Diesel ORM integration. Geometries are stored as EWKB BLOBs, matching the PostGIS wire format. Everything lives in a single crate behind feature flags. The default feature is `diesel-sqlite`. The full feature matrix is documented on [docs.rs](https://docs.rs/sqlitegis).
 
-## Features
-
-| Feature | What it adds |
-| --- | --- |
-| `default = ["diesel-sqlite"]` | Diesel + SQLite, the most common usage |
-| `sqlite` | In-process registration API (`register_functions`). Pulls libsqlite3-sys on native, sqlite-wasm-rs on wasm32 |
-| `sqlite-extension` | Adds the `#[no_mangle]` C entry point so the cdylib build is loadable via SQLite's `load_extension` |
-| `diesel` | Backend-agnostic Diesel types (`Geometry`, `Geography`) and the `GeometryExpressionMethods` trait |
-| `diesel-sqlite` | Implies `diesel` and `sqlite`; adds Diesel's SQLite backend |
-| `diesel-postgres` | Implies `diesel`; adds Diesel's Postgres backend for use against PostGIS |
-
-```toml
-[dependencies]
-sqlitegis = "0.2"                                       # default: diesel-sqlite
-sqlitegis = { version = "0.2", default-features = false } # pure-Rust geometry only
-sqlitegis = { version = "0.2", features = ["sqlite-extension"] } # for the loadable .so
+```sh
+cargo add sqlitegis
 ```
 
 ## SQLite extension
