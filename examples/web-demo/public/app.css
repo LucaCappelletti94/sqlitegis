@@ -98,26 +98,32 @@ main {
     margin: 0;
 }
 
-/* The Results panel drops side and bottom padding so the table goes edge
-   to edge and reaches the bottom border. The header, pagination row, and
-   the placeholder/error variants reapply their own inset padding since
-   they shouldn't touch the borders. */
+/* The Results panel drops its inner padding so the table goes edge to
+   edge. The 2:1 aspect ratio matches the map canvas (1080x540), which
+   sits in the same grid row at the same column width, so both panels
+   land at exactly the same height. Placeholder/error variants reapply
+   their own inset padding since they shouldn't touch the borders. */
 .panel-grid > section.results-panel {
-    padding: 16px 0 0 0;
+    padding: 0;
+    aspect-ratio: 2 / 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
-/* When pagination is visible it sits flush at the bottom; give it a touch
-   of bottom padding so the buttons don't kiss the section border. */
-.panel-grid > section.results-panel .pagination {
-    padding-bottom: 12px;
-}
-
-.panel-grid > section.results-panel .panel-header,
-.panel-grid > section.results-panel .pagination,
 .panel-grid > section.results-panel > .meta,
 .panel-grid > section.results-panel > .error {
-    padding-left: 16px;
-    padding-right: 16px;
+    padding: 16px;
+}
+
+/* The scroll wrapper fills the rest of the panel; the inner table
+   handles its own scrolling when the result set is taller than the
+   panel. min-height: 0 is required so flex children can shrink below
+   their content size and trigger overflow. */
+.results-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
 }
 
 /* During the cities-load phase, map and progress bar share one centered
@@ -135,22 +141,6 @@ main {
     margin-bottom: 0;
 }
 
-/* Results pagination: prev / page indicator / next, centered under the
-   table. Disabled buttons dim and stop responding to hover. */
-.pagination {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    margin-top: 10px;
-}
-
-.pagination button:disabled {
-    opacity: 0.4;
-    cursor: default;
-    filter: none;
-}
-
 
 header h1 {
     margin: 0 0 4px;
@@ -158,10 +148,21 @@ header h1 {
     letter-spacing: -0.5px;
 }
 
+/* Tagline shares a row with the resource icons. The flex row keeps the
+   tagline on the left and the icon badges flush at the right edge of
+   the tagline width, dropping to a new line on narrow viewports. */
+.subtitle-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin: 0 0 12px;
+}
+
 /* Tagline: the elevator pitch sentence under the title. Sits tight to the
    h1 baseline and uses the accent colour to anchor the brand reading. */
 header .tagline {
-    margin: 0 0 12px;
+    margin: 0;
     color: var(--accent);
     font-size: 16px;
     font-weight: 500;
@@ -169,54 +170,71 @@ header .tagline {
 }
 
 /* Intro paragraph: the longer "what this thing is" copy. Capped at a
-   comfortable measure so it doesn't sprawl across the 1500px container. */
+   comfortable measure so it doesn't sprawl across the 1500px container.
+   Justified with auto-hyphenation so the right edge stays clean even
+   when lines wrap around inline links. */
 header .intro {
     margin: 0 0 16px;
-    max-width: 780px;
+    max-width: 640px;
     color: var(--fg-muted);
     line-height: 1.55;
+    text-align: justify;
+    text-justify: inter-word;
+    hyphens: auto;
+    overflow-wrap: break-word;
 }
 
-/* Capability badges sitting between the intro and the resource links. */
-.feature-pills {
+/* Inline links inside the intro pick up the accent colour with an
+   understated underline that brightens on hover, so the prose reads
+   naturally without browser-default blue. */
+header .intro a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid var(--border);
+    transition: border-color .12s ease-out;
+}
+
+header .intro a:hover,
+header .intro a:focus {
+    border-bottom-color: var(--accent);
+    outline: none;
+}
+
+/* GitHub / docs.rs / crates.io as small icon-and-label badges sitting
+   next to the tagline. Soft accent background, accent text and icon,
+   brighter on hover. */
+.quick-links {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin: 0 0 16px;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
 }
 
-.feature-pills .pill {
+.quick-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     background: var(--accent-soft);
     color: var(--accent);
     border: 1px solid var(--border);
     border-radius: 999px;
     padding: 3px 10px;
     font-size: 12px;
-    font-family: var(--mono);
-    white-space: nowrap;
-}
-
-/* GitHub / docs.rs links, comma-style row that wraps on narrow widths. */
-.quick-links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 18px;
-    margin: 0 0 24px;
-}
-
-.quick-links a {
-    color: var(--accent);
-    text-decoration: none;
-    font-size: 13px;
     font-weight: 500;
-    border-bottom: 1px solid transparent;
-    transition: border-color 120ms ease-out;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: filter 120ms ease-out;
 }
 
 .quick-links a:hover,
 .quick-links a:focus {
-    border-bottom-color: var(--accent);
+    filter: brightness(1.25);
     outline: none;
+}
+
+.link-icon {
+    fill: currentColor;
+    vertical-align: middle;
 }
 
 section {

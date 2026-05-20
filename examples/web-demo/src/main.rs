@@ -9,8 +9,9 @@ mod state;
 mod viz;
 
 use dioxus::prelude::*;
+use dioxus_free_icons::icons::fa_brands_icons::FaGithub;
 use dioxus_free_icons::icons::fa_solid_icons::{
-    FaCircleNotch, FaHourglass, FaTriangleExclamation,
+    FaBookOpen, FaCircleNotch, FaCube, FaHourglass, FaTriangleExclamation,
 };
 use dioxus_free_icons::Icon;
 
@@ -102,47 +103,89 @@ fn App() -> Element {
                     }
                     "SQLiteGIS"
                 }
-                p { class: "tagline",
-                    "Spatial SQL for SQLite, the PostGIS way."
+                div { class: "subtitle-row",
+                    p { class: "tagline",
+                        "Spatial SQL for SQLite, the PostGIS way."
+                    }
+                    nav { class: "quick-links", aria_label: "Project resources",
+                        a {
+                            href: "https://github.com/LucaCappelletti94/sqlitegis",
+                            rel: "noopener",
+                            target: "_blank",
+                            title: "GitHub repository",
+                            Icon { width: 13, height: 13, icon: FaGithub, class: "link-icon".to_string() }
+                            "GitHub"
+                        }
+                        a {
+                            href: "https://docs.rs/sqlitegis",
+                            rel: "noopener",
+                            target: "_blank",
+                            title: "API documentation on docs.rs",
+                            Icon { width: 13, height: 13, icon: FaBookOpen, class: "link-icon".to_string() }
+                            "docs.rs"
+                        }
+                        a {
+                            href: "https://crates.io/crates/sqlitegis",
+                            rel: "noopener",
+                            target: "_blank",
+                            title: "Crate on crates.io",
+                            Icon { width: 13, height: 13, icon: FaCube, class: "link-icon".to_string() }
+                            "crates.io"
+                        }
+                    }
                 }
-                p { class: "intro",
-                    "SQLiteGIS is a pure-Rust SQLite extension that ships over 100 "
-                    "PostGIS-compatible spatial functions plus first-class "
-                    "Diesel ORM bindings. Geometries are stored as EWKB BLOBs "
-                    "(the PostGIS wire format), and queries support planar and "
-                    "geodesic distance, DE-9IM predicates, and R-tree spatial "
-                    "indexes. The full stack runs in this page through "
-                    "WebAssembly, so you can experiment with real spatial SQL "
-                    "without setting up Postgres."
-                }
-                div { class: "feature-pills",
-                    span { class: "pill", "100+ ST_* functions" }
-                    span { class: "pill", "Geodesic + planar distance" }
-                    span { class: "pill", "R-tree spatial indexes" }
-                    span { class: "pill", "DE-9IM predicates" }
-                    span { class: "pill", "Diesel ORM" }
-                    span { class: "pill", "Pure Rust" }
-                    span { class: "pill", "Native + WASM" }
-                }
-                nav { class: "quick-links", aria_label: "Project resources",
+                p { class: "intro", lang: "en",
+                    "SQLiteGIS brings "
                     a {
-                        href: "https://github.com/LucaCappelletti94/sqlitegis",
+                        href: "https://postgis.net/",
                         rel: "noopener",
                         target: "_blank",
-                        "GitHub"
+                        "PostGIS"
                     }
+                    "-style spatial SQL to "
                     a {
-                        href: "https://docs.rs/sqlitegis",
+                        href: "https://sqlite.org/",
                         rel: "noopener",
                         target: "_blank",
-                        "docs.rs"
+                        "SQLite"
                     }
+                    ", in pure "
                     a {
-                        href: "https://crates.io/crates/sqlitegis",
+                        href: "https://www.rust-lang.org/",
                         rel: "noopener",
                         target: "_blank",
-                        "crates.io"
+                        "Rust"
                     }
+                    ", with "
+                    a {
+                        href: "https://diesel.rs/",
+                        rel: "noopener",
+                        target: "_blank",
+                        "Diesel"
+                    }
+                    " ORM bindings. Geometries are "
+                    a {
+                        href: "https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry#Well-known_binary",
+                        rel: "noopener",
+                        target: "_blank",
+                        "EWKB"
+                    }
+                    " BLOBs in PostGIS's wire format, so queries port unmodified. "
+                    "Runs in your browser via "
+                    a {
+                        href: "https://webassembly.org/",
+                        rel: "noopener",
+                        target: "_blank",
+                        "WebAssembly"
+                    }
+                    ". Try it on the "
+                    a {
+                        href: "https://download.geonames.org/export/dump/",
+                        rel: "noopener",
+                        target: "_blank",
+                        "cities5000"
+                    }
+                    " dataset below."
                 }
             }
             StatusBanner { stage: stage.read().clone() }

@@ -21,9 +21,9 @@ dioxus = { version = "0.7", features = ["web"] }
 dioxus-code = { version = "0.1", default-features = false, features = ["lang-sql"] }
 dioxus-code-editor = "0.1"
 
-# Font Awesome icons as inline SVG components. Solid set covers everything the
-# demo needs (run, table, map, status indicators).
-dioxus-free-icons = { version = "0.10", features = ["font-awesome-solid"] }
+# Font Awesome icons as inline SVG components. Solid set covers everything
+# the demo needs (run, table, map, status indicators); brands adds GitHub.
+dioxus-free-icons = { version = "0.10", features = ["font-awesome-solid", "font-awesome-brands"] }
 
 # SQLiteGIS via path so the demo always tracks the live source.
 sqlitegis = { path = "../../sqlitegis", features = ["diesel-sqlite"] }

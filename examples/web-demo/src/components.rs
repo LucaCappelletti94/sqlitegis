@@ -4,9 +4,9 @@ use dioxus::prelude::*;
 use dioxus_code::{CodeTheme, Theme};
 use dioxus_code_editor::{CodeEditor, Language};
 use dioxus_free_icons::icons::fa_solid_icons::{
-    FaArrowsRotate, FaBullseye, FaChevronLeft, FaChevronRight, FaCircleCheck, FaCircleDot, FaCode,
-    FaCompass, FaDatabase, FaFileCode, FaFlag, FaFont, FaMagnifyingGlass, FaPlay, FaSitemap,
-    FaTableCells, FaTriangleExclamation, FaVectorSquare,
+    FaArrowsRotate, FaBolt, FaBullseye, FaCircleCheck, FaCircleDot, FaCode, FaCompass, FaDatabase,
+    FaFileCode, FaFlag, FaFont, FaMagnifyingGlass, FaPlay, FaSitemap, FaTriangleExclamation,
+    FaVectorSquare,
 };
 use dioxus_free_icons::Icon;
 
@@ -82,12 +82,28 @@ FROM places
 ORDER BY km LIMIT 100;";
 
 const PRESET_RADIUS: &str = "\
--- Cities within 2000 km of your location.
+-- Cities within 1000 km of your location.
 SELECT name, country, population,
   ST_X(geom) AS lon, ST_Y(geom) AS lat
 FROM places
-WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 2000000.0)
+WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 1000000.0)
 ORDER BY population DESC;";
+
+const PRESET_RADIUS_IDX: &str = "\
+-- Indexed radius: R-tree bbox prefilter then geodesic refinement.
+-- dlon scales with 1/cos(lat) so the bound stays safe at the poles
+-- where one degree of longitude shrinks.
+SELECT p.name, p.country, p.population,
+  ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
+FROM places p
+JOIN places_geom_rtree r ON p.rowid = r.id
+WHERE r.xmax >= :lon - 1000000.0/(111320.0*cos(radians(:lat)))
+  AND r.xmin <= :lon + 1000000.0/(111320.0*cos(radians(:lat)))
+  AND r.ymax >= :lat - 1000000.0/111320.0
+  AND r.ymin <= :lat + 1000000.0/111320.0
+  AND ST_DWithinSphere(p.geom,
+                       ST_Point(:lon, :lat, 4326), 1000000.0)
+ORDER BY p.population DESC;";
 
 const PRESET_ENVELOPE: &str = "\
 -- Cities inside a 30x30 degree box centered on the probe point.
@@ -97,7 +113,7 @@ FROM places
 WHERE ST_Intersects(geom, ST_MakeEnvelope(
   :lon - 15.0, :lat - 15.0, :lon + 15.0, :lat + 15.0, 4326
 ))
-ORDER BY population DESC LIMIT 500;";
+ORDER BY population DESC LIMIT 100;";
 
 const PRESET_ASTEXT: &str = "\
 -- Round-trip: BLOB geometry to human-readable WKT.
@@ -203,7 +219,7 @@ pub fn QueryPanel(
                         }
                         PresetChip {
                             label: "Radius",
-                            description: "List every city within 2000 km of the probe point, sorted by population",
+                            description: "List every city within 1000 km of the probe point, sorted by population",
                             icon: rsx! { Icon { width: 12, height: 12, icon: FaCompass, class: "btn-icon".to_string() } },
                             on_pick: move |_| {
                                 let new_sql = PRESET_RADIUS.to_string();
@@ -212,8 +228,18 @@ pub fn QueryPanel(
                             },
                         }
                         PresetChip {
+                            label: "Radius+",
+                            description: "Same radius search, but R-tree prefiltered so the engine touches O(log N) candidates instead of every row",
+                            icon: rsx! { Icon { width: 12, height: 12, icon: FaBolt, class: "btn-icon".to_string() } },
+                            on_pick: move |_| {
+                                let new_sql = PRESET_RADIUS_IDX.to_string();
+                                sql.set(new_sql.clone());
+                                on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
+                            },
+                        }
+                        PresetChip {
                             label: "BBOX",
-                            description: "List cities inside a 30 by 30 degree box centered on the probe point, top 500 by population",
+                            description: "List cities inside a 30 by 30 degree box centered on the probe point, top 100 by population",
                             icon: rsx! { Icon { width: 12, height: 12, icon: FaVectorSquare, class: "btn-icon".to_string() } },
                             on_pick: move |_| {
                                 let new_sql = PRESET_ENVELOPE.to_string();
@@ -328,38 +354,6 @@ fn PresetChip(
 
 #[component]
 pub fn ResultsPanel(outcome: Option<QueryOutcome>) -> Element {
-    const PAGE_SIZE: usize = 10;
-    let mut page = use_signal(|| 0usize);
-
-    let row_count = match &outcome {
-        Some(QueryOutcome::Rows { result, .. }) => result.rows.len(),
-        _ => 0,
-    };
-    let total_pages = row_count.div_ceil(PAGE_SIZE).max(1);
-    // Clamp so navigation stays valid if a new query returns fewer rows than
-    // the previously displayed page would address.
-    let current = (*page.read()).min(total_pages - 1);
-    let start = current * PAGE_SIZE;
-    let end = (start + PAGE_SIZE).min(row_count);
-
-    let stats = match &outcome {
-        Some(QueryOutcome::Rows { result, elapsed_ms }) => {
-            let n = result.rows.len();
-            let ms = *elapsed_ms;
-            rsx! { span { class: "meta", "{n} row(s) | {ms:.1} ms" } }
-        }
-        Some(QueryOutcome::Affected { rows, elapsed_ms }) => {
-            let n = *rows;
-            let ms = *elapsed_ms;
-            rsx! {
-                span { class: "meta",
-                    Icon { width: 13, height: 13, icon: FaCircleCheck, class: "status-icon ok".to_string() }
-                    "OK | {n} row(s) affected | {ms:.1} ms"
-                }
-            }
-        }
-        _ => rsx! {},
-    };
     let body = match outcome {
         None => rsx! { p { class: "meta", "Run a query to see results here." } },
         Some(QueryOutcome::Error(msg)) => rsx! {
@@ -368,10 +362,15 @@ pub fn ResultsPanel(outcome: Option<QueryOutcome>) -> Element {
                 "{msg}"
             }
         },
-        Some(QueryOutcome::Affected { .. }) => rsx! {},
+        Some(QueryOutcome::Affected { rows, .. }) => rsx! {
+            p { class: "meta",
+                Icon { width: 13, height: 13, icon: FaCircleCheck, class: "status-icon ok".to_string() }
+                "OK | {rows} row(s) affected"
+            }
+        },
         Some(QueryOutcome::Rows { result, .. }) => {
             let columns = result.columns.clone();
-            let page_rows: Vec<_> = result.rows[start..end].to_vec();
+            let rows = result.rows.clone();
             rsx! {
                 div { class: "results-scroll",
                     table { class: "results",
@@ -383,7 +382,7 @@ pub fn ResultsPanel(outcome: Option<QueryOutcome>) -> Element {
                             }
                         }
                         tbody {
-                            for row in page_rows.iter() {
+                            for row in rows.iter() {
                                 tr {
                                     for cell in row.iter() {
                                         td { "{cell}" }
@@ -393,41 +392,9 @@ pub fn ResultsPanel(outcome: Option<QueryOutcome>) -> Element {
                         }
                     }
                 }
-                if total_pages > 1 {
-                    div { class: "pagination",
-                        button {
-                            aria_label: "Show the previous page of results",
-                            title: "Previous page",
-                            disabled: current == 0,
-                            onclick: move |_| page.set(current.saturating_sub(1)),
-                            Icon { width: 12, height: 12, icon: FaChevronLeft, class: "btn-icon".to_string() }
-                            "Prev"
-                        }
-                        span { class: "meta", "Page {current + 1} of {total_pages}" }
-                        button {
-                            aria_label: "Show the next page of results",
-                            title: "Next page",
-                            disabled: current + 1 >= total_pages,
-                            onclick: move |_| page.set(current + 1),
-                            "Next"
-                            Icon { width: 12, height: 12, icon: FaChevronRight, class: "btn-icon".to_string() }
-                        }
-                    }
-                }
             }
         }
     };
 
-    rsx! {
-        section { class: "results-panel",
-            div { class: "panel-header",
-                h2 {
-                    Icon { width: 16, height: 16, icon: FaTableCells, class: "section-icon".to_string() }
-                    "Results"
-                }
-                {stats}
-            }
-            {body}
-        }
-    }
+    rsx! { section { class: "results-panel", {body} } }
 }
