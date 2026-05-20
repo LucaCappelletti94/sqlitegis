@@ -669,35 +669,27 @@
 
       <!-- SQL Example -->
       <text x="24" y="60" class="label" font-size="12">SQL. Spatial query with SQLiteGIS as a loadable extension:</text>
-      <rect x="16" y="68" width="528" height="130" rx="8" fill="#2D3436"/>
-      <foreignObject x="24" y="74" width="512" height="120">
+      <rect x="16" y="68" width="528" height="120" rx="8" fill="#2D3436"/>
+      <foreignObject x="24" y="74" width="512" height="110">
         <div xmlns="http://www.w3.org/1999/xhtml" style="font-family: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace; font-size: 12px; color: #E8E8E8; line-height: 1.65; white-space: pre; overflow: hidden;">
-<span style="color: #8BB8D4;">.load</span> ./libsqlitegis
-
 <span style="color: #C7CEEA;">SELECT</span> name, <span style="color: #B5EAD7;">ST_Distance</span>(
-    location,
-    <span style="color: #B5EAD7;">ST_Point</span>(<span style="color: #FFDAC1;">-73.9857</span>, <span style="color: #FFDAC1;">40.7484</span>)
-) <span style="color: #C7CEEA;">AS</span> dist
+    location, <span style="color: #B5EAD7;">ST_Point</span>(<span style="color: #FFDAC1;">-73.99</span>, <span style="color: #FFDAC1;">40.75</span>)
+) <span style="color: #C7CEEA;">AS</span> d
 <span style="color: #C7CEEA;">FROM</span> places
-<span style="color: #C7CEEA;">WHERE</span> <span style="color: #B5EAD7;">ST_DWithin</span>(location, <span style="color: #B5EAD7;">ST_Point</span>(<span style="color: #FFDAC1;">-73.9857</span>, <span style="color: #FFDAC1;">40.7484</span>), <span style="color: #FFDAC1;">1000</span>);</div>
+<span style="color: #C7CEEA;">WHERE</span> <span style="color: #B5EAD7;">ST_DWithin</span>(location, <span style="color: #B5EAD7;">ST_Point</span>(<span style="color: #FFDAC1;">-73.99</span>, <span style="color: #FFDAC1;">40.75</span>), <span style="color: #FFDAC1;">1000</span>);</div>
       </foreignObject>
 
       <!-- Rust/Diesel Example -->
-      <text x="24" y="222" class="label" font-size="12">Rust. Diesel ORM integration:</text>
-      <rect x="16" y="230" width="528" height="145" rx="8" fill="#2D3436"/>
-      <foreignObject x="24" y="236" width="512" height="135">
+      <text x="24" y="212" class="label" font-size="12">Rust. Diesel ORM integration:</text>
+      <rect x="16" y="220" width="528" height="140" rx="8" fill="#2D3436"/>
+      <foreignObject x="24" y="226" width="512" height="130">
         <div xmlns="http://www.w3.org/1999/xhtml" style="font-family: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace; font-size: 12px; color: #E8E8E8; line-height: 1.65; white-space: pre; overflow: hidden;">
 <span style="color: #C7CEEA;">use</span> sqlitegis::diesel::prelude::*;
-
-<span style="color: #C7CEEA;">let</span> nearby = places::table
-    .<span style="color: #8BB8D4;">filter</span>(places::location.<span style="color: #B5EAD7;">st_dwithin</span>(
-        <span style="color: #B5EAD7;">st_point</span>(<span style="color: #FFDAC1;">-73.9857</span>, <span style="color: #FFDAC1;">40.7484</span>),
-        <span style="color: #FFDAC1;">1000.0</span>,
-    ))
-    .<span style="color: #8BB8D4;">select</span>((places::name, places::location.<span style="color: #B5EAD7;">st_distance</span>(
-        <span style="color: #B5EAD7;">st_point</span>(<span style="color: #FFDAC1;">-73.9857</span>, <span style="color: #FFDAC1;">40.7484</span>),
-    )))
-    .<span style="color: #8BB8D4;">load</span>::&lt;(String, f64)&gt;(&amp;<span style="color: #C7CEEA;">mut</span> conn)?;</div>
+<span style="color: #C7CEEA;">let</span> pt = <span style="color: #B5EAD7;">st_point</span>(<span style="color: #FFDAC1;">-73.99</span>, <span style="color: #FFDAC1;">40.75</span>).<span style="color: #8BB8D4;">nullable</span>();
+<span style="color: #C7CEEA;">let</span> near = places::table
+    .<span style="color: #8BB8D4;">filter</span>(places::location.<span style="color: #B5EAD7;">st_dwithin</span>(pt, <span style="color: #FFDAC1;">1000.0</span>).<span style="color: #8BB8D4;">eq</span>(<span style="color: #FFDAC1;">true</span>))
+    .<span style="color: #8BB8D4;">select</span>(places::name)
+    .<span style="color: #8BB8D4;">load</span>::&lt;String&gt;(&amp;<span style="color: #C7CEEA;">mut</span> conn)?;</div>
       </foreignObject>
     </g>
   </g>
