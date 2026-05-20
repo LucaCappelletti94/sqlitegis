@@ -1,5 +1,5 @@
 #![cfg(all(feature = "diesel-sqlite", not(target_arch = "wasm32")))]
-//! Native SQLite integration tests for geolite-diesel.
+//! Native SQLite integration tests for the Diesel integration.
 //!
 //! Uses `sqlite3_auto_extension` to register geolite functions on every
 //! `SqliteConnection::establish()` call, then exercises spatial functions

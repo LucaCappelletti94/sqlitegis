@@ -56,7 +56,7 @@ struct GeoGeogRow {
 fn vec_u8_roundtrip_geometry() {
     let mut c = conn();
 
-    // Build EWKB for POINT(1 2) with no SRID via geolite-core
+    // Build EWKB for POINT(1 2) with no SRID via the core writer.
     let ewkb =
         geolite::core::ewkb::write_ewkb(&geo::Geometry::Point(geo::Point::new(1.0, 2.0)), None)
             .unwrap();

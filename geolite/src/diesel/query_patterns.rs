@@ -18,8 +18,8 @@
 //! - Ownership markers are persisted in `geolite_spatial_index_catalog`.
 //!   Helpers fail closed if managed objects exist but ownership markers are
 //!   missing or externally modified.
-//! - In `geolite-diesel`, index lifecycle stays on the raw SQL path
-//!   (`diesel::sql_query`) on purpose. No typed wrappers are exported in
+//! - Index lifecycle stays on the raw SQL path (`diesel::sql_query`) on
+//!   purpose. No typed wrappers are exported in
 //!   `geolite::diesel::functions` for these two lifecycle helpers.
 //!
 //! Every spatial query follows a **two-stage** pattern:

@@ -1,8 +1,8 @@
-// Shared test logic for Diesel + SQLite integration tests (native & WASM).
+// Shared test logic for Diesel + SQLite integration tests (native and WASM).
 //
-// Included via `include!()` by both `sqlite_integration.rs` and
-// `wasm_integration.rs`, following the same pattern as
-// `geolite-sqlite/tests/test_db_macro.rs`.
+// Included via `include!()` by both `diesel_sqlite_integration.rs` and
+// `diesel_wasm_integration.rs`, following the same pattern as
+// `sqlite_test_db_macro.rs`.
 
 diesel::table! {
     features (id) {

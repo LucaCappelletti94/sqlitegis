@@ -1,5 +1,5 @@
 #![cfg(all(feature = "diesel-sqlite", target_arch = "wasm32"))]
-//! WASM integration tests for geolite-diesel.
+//! WASM integration tests for the Diesel integration.
 //!
 //! Same test logic as the native `sqlite_integration.rs`, but uses
 //! `sqlite-wasm-rs` for auto-extension and `wasm_bindgen_test` as the

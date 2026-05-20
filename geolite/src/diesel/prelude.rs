@@ -1,4 +1,4 @@
-//! Convenience re-exports for geolite-diesel.
+//! Convenience re-exports for the Diesel integration.
 //!
 //! ```rust
 //! use geolite::diesel::prelude::*;

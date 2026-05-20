@@ -4,7 +4,7 @@
 // dead_code and unused imports at module scope so the file still builds
 // cleanly when that feature is off.
 #![allow(dead_code, unused_imports)]
-//! Integration tests for geolite-sqlite.
+//! Integration tests for the SQLite extension.
 
 use libsqlite3_sys::*;
 use std::ffi::{CStr, CString};

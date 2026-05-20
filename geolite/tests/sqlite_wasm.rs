@@ -1,5 +1,5 @@
 #![cfg(target_arch = "wasm32")]
-//! Headless WASM integration tests for geolite-sqlite.
+//! Headless WASM integration tests for the SQLite extension.
 
 use sqlite_wasm_rs::*;
 use std::ffi::{CStr, CString};
