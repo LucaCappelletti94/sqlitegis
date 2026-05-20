@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
-     width="1200" height="2540" viewBox="0 0 1200 2540">
+     width="1200" height="2600" viewBox="0 0 1200 2600">
   <defs>
     <!-- Styles -->
     <style>
@@ -198,7 +198,7 @@
   <!-- ============================================= -->
   <!-- BACKGROUND                                    -->
   <!-- ============================================= -->
-  <rect width="1200" height="2540" fill="#F7F9FC"/>
+  <rect width="1200" height="2600" fill="#F7F9FC"/>
 
   <!-- ============================================= -->
   <!-- SECTION 1: HEADER BANNER (0–260)              -->
@@ -247,12 +247,12 @@
   <!-- SECTION 2: ABSTRACT / OVERVIEW (280–520)      -->
   <!-- ============================================= -->
   <g id="section-abstract" transform="translate(0, 280)">
-    <rect x="40" y="0" width="1120" height="230" class="card card-shadow" rx="12"/>
+    <rect x="40" y="0" width="1120" height="290" class="card card-shadow" rx="12"/>
 
     <!-- Accent bar -->
-    <rect x="40" y="0" width="6" height="230" rx="3" fill="#6B9FBF"/>
+    <rect x="40" y="0" width="6" height="290" rx="3" fill="#6B9FBF"/>
 
-    <foreignObject x="70" y="20" width="1070" height="190">
+    <foreignObject x="70" y="20" width="1070" height="250">
       <div xmlns="http://www.w3.org/1999/xhtml" style="font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; color: #2D3436; line-height: 1.7;">
         <p style="font-size: 16px; margin: 0 0 14px 0; text-align: justify;">
           <strong style="color: #6B9FBF;">SQLiteGIS</strong> is a pure-Rust spatial extension for SQLite that brings
@@ -277,7 +277,7 @@
   <!-- ============================================= -->
   <!-- WHY SQLITEGIS                                 -->
   <!-- ============================================= -->
-  <g id="section-motivation" transform="translate(0, 540)">
+  <g id="section-motivation" transform="translate(0, 600)">
     <!-- Section heading -->
     <g transform="translate(40, 0)">
       <g color="#6B9FBF">
@@ -337,7 +337,7 @@
   <!-- SECTION 4: SPATIAL FUNCTION CATEGORIES        -->
   <!-- (1040–1680)                                   -->
   <!-- ============================================= -->
-  <g id="section-functions" transform="translate(0, 830)">
+  <g id="section-functions" transform="translate(0, 890)">
     <!-- Section heading -->
     <g transform="translate(40, 0)">
       <g color="#6B9FBF">
@@ -500,7 +500,7 @@
   <!-- ============================================= -->
   <!-- SECTION 5: KEY FEATURES (1700–2060)           -->
   <!-- ============================================= -->
-  <g id="section-features" transform="translate(0, 1490)">
+  <g id="section-features" transform="translate(0, 1550)">
     <!-- Section heading -->
     <g transform="translate(40, 0)">
       <g color="#6B9FBF">
@@ -575,7 +575,7 @@
   <!-- ============================================= -->
   <!-- SECTION 6: WIRE FORMAT & USAGE (2080–2560)    -->
   <!-- ============================================= -->
-  <g id="section-wire-usage" transform="translate(0, 1870)">
+  <g id="section-wire-usage" transform="translate(0, 1930)">
     <!-- Section heading -->
     <g transform="translate(40, 0)">
       <g color="#6B9FBF">
@@ -695,7 +695,7 @@
   <!-- ============================================= -->
   <!-- FOOTER                                        -->
   <!-- ============================================= -->
-  <g id="section-footer" transform="translate(0, 2350)">
+  <g id="section-footer" transform="translate(0, 2410)">
     <path d="M0,30 Q0,0 30,0 H1170 Q1200,0 1200,30 V180 H0 Z" fill="url(#footerGrad)"/>
 
     <!-- Decorative circles -->
