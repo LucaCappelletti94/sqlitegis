@@ -13,9 +13,7 @@ use geo::Closest;
 use geo::{Geometry, Point, Rect};
 
 use crate::core::error::{GeoLiteError, Result};
-use crate::core::ewkb::{
-    ensure_matching_srid, geometry_type_name, parse_ewkb, parse_ewkb_pair, write_ewkb,
-};
+use crate::core::ewkb::{ensure_matching_srid, parse_ewkb, parse_ewkb_pair, write_ewkb};
 use crate::core::functions::emptiness::is_empty_geometry;
 
 fn require_non_empty_geometry(geom: &Geometry<f64>, fn_name: &str) -> Result<()> {
@@ -69,10 +67,10 @@ pub fn st_length(blob: &[u8]) -> Result<f64> {
         Geometry::LineString(ls) => Euclidean.length(ls),
         Geometry::MultiLineString(mls) => mls.0.iter().map(|ls| Euclidean.length(ls)).sum(),
         other => {
-            return Err(GeoLiteError::WrongType {
-                expected: "LineString or MultiLineString",
-                actual: geometry_type_name(other),
-            })
+            return Err(GeoLiteError::wrong_type(
+                "LineString or MultiLineString",
+                other,
+            ))
         }
     };
     Ok(len)
@@ -101,12 +99,7 @@ pub fn st_perimeter(blob: &[u8]) -> Result<f64> {
     let perim = match &geom {
         Geometry::Polygon(p) => poly_perimeter(p),
         Geometry::MultiPolygon(mp) => mp.0.iter().map(poly_perimeter).sum(),
-        other => {
-            return Err(GeoLiteError::WrongType {
-                expected: "Polygon or MultiPolygon",
-                actual: geometry_type_name(other),
-            })
-        }
+        other => return Err(GeoLiteError::wrong_type("Polygon or MultiPolygon", other)),
     };
     Ok(perim)
 }
@@ -151,10 +144,9 @@ pub fn st_distance(a: &[u8], b: &[u8]) -> Result<f64> {
 /// ```
 pub fn st_centroid(blob: &[u8]) -> Result<Vec<u8>> {
     let (geom, srid) = parse_ewkb(blob)?;
-    let c = geom.centroid().ok_or_else(|| GeoLiteError::WrongType {
-        expected: "non-empty geometry",
-        actual: geometry_type_name(&geom),
-    })?;
+    let c = geom
+        .centroid()
+        .ok_or_else(|| GeoLiteError::wrong_type("non-empty geometry", &geom))?;
     write_ewkb(&Geometry::Point(c), srid)
 }
 
@@ -176,10 +168,7 @@ pub fn st_point_on_surface(blob: &[u8]) -> Result<Vec<u8>> {
     let (geom, srid) = parse_ewkb(blob)?;
     let p = geom
         .interior_point()
-        .ok_or_else(|| GeoLiteError::WrongType {
-            expected: "non-empty geometry",
-            actual: geometry_type_name(&geom),
-        })?;
+        .ok_or_else(|| GeoLiteError::wrong_type("non-empty geometry", &geom))?;
     write_ewkb(&Geometry::Point(p), srid)
 }
 
@@ -282,10 +271,7 @@ fn bbox(blob: &[u8]) -> Result<Option<Rect<f64>>> {
         return Ok(None);
     }
     geom.bounding_rect()
-        .ok_or_else(|| GeoLiteError::WrongType {
-            expected: "non-empty geometry",
-            actual: geometry_type_name(&geom),
-        })
+        .ok_or_else(|| GeoLiteError::wrong_type("non-empty geometry", &geom))
         .map(Some)
 }
 
@@ -294,10 +280,7 @@ fn bbox(blob: &[u8]) -> Result<Option<Rect<f64>>> {
 fn require_point(g: Geometry<f64>) -> Result<Point<f64>> {
     match g {
         Geometry::Point(p) => Ok(p),
-        other => Err(GeoLiteError::WrongType {
-            expected: "Point",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("Point", &other)),
     }
 }
 
@@ -390,10 +373,10 @@ pub fn st_length_sphere(blob: &[u8]) -> Result<f64> {
     match &geom {
         Geometry::LineString(ls) => Ok(Haversine.length(ls)),
         Geometry::MultiLineString(mls) => Ok(mls.0.iter().map(|ls| Haversine.length(ls)).sum()),
-        other => Err(GeoLiteError::WrongType {
-            expected: "LineString or MultiLineString",
-            actual: geometry_type_name(other),
-        }),
+        other => Err(GeoLiteError::wrong_type(
+            "LineString or MultiLineString",
+            other,
+        )),
     }
 }
 

@@ -7,7 +7,7 @@ use geo::algorithm::Buffer;
 use geo::{Geometry, MultiPolygon};
 
 use crate::core::error::{GeoLiteError, Result};
-use crate::core::ewkb::{geometry_type_name, parse_ewkb, parse_ewkb_pair, write_ewkb};
+use crate::core::ewkb::{parse_ewkb, parse_ewkb_pair, write_ewkb};
 use crate::core::functions::emptiness::is_empty_geometry;
 
 /// Extract a Polygon or MultiPolygon from a geometry, converting single
@@ -16,10 +16,7 @@ fn require_multi_polygon(geom: Geometry<f64>) -> Result<MultiPolygon<f64>> {
     match geom {
         Geometry::Polygon(p) => Ok(MultiPolygon::new(vec![p])),
         Geometry::MultiPolygon(mp) => Ok(mp),
-        other => Err(GeoLiteError::WrongType {
-            expected: "Polygon or MultiPolygon",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("Polygon or MultiPolygon", &other)),
     }
 }
 

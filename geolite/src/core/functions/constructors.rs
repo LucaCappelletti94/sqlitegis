@@ -6,7 +6,7 @@
 use geo::{Coord, Geometry, LineString, Point, Polygon, Rect};
 
 use crate::core::error::{GeoLiteError, Result};
-use crate::core::ewkb::{geometry_type_name, parse_ewkb, parse_ewkb_pair, write_ewkb};
+use crate::core::ewkb::{parse_ewkb, parse_ewkb_pair, write_ewkb};
 
 /// ST_Point / ST_MakePoint (2D) -- construct a Point geometry.
 ///
@@ -45,24 +45,12 @@ pub fn st_point(x: f64, y: f64, srid: Option<i32>) -> Result<Vec<u8>> {
 /// ```
 pub fn st_make_line(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
     let (ga, gb, srid) = parse_ewkb_pair(a, b)?;
-    let pa = match ga {
-        Geometry::Point(p) => p,
-        other => {
-            return Err(GeoLiteError::WrongType {
-                expected: "Point",
-                actual: geometry_type_name(&other),
-            })
-        }
+    let extract_point = |g: Geometry<f64>| match g {
+        Geometry::Point(p) => Ok(p),
+        other => Err(GeoLiteError::wrong_type("Point", &other)),
     };
-    let pb = match gb {
-        Geometry::Point(p) => p,
-        other => {
-            return Err(GeoLiteError::WrongType {
-                expected: "Point",
-                actual: geometry_type_name(&other),
-            })
-        }
-    };
+    let pa = extract_point(ga)?;
+    let pb = extract_point(gb)?;
 
     for p in [&pa, &pb] {
         if p.x().is_nan() || p.y().is_nan() {
@@ -98,12 +86,7 @@ pub fn st_make_polygon(shell: &[u8]) -> Result<Vec<u8>> {
     let (gs, srid) = parse_ewkb(shell)?;
     let exterior = match gs {
         Geometry::LineString(ls) => ls,
-        other => {
-            return Err(GeoLiteError::WrongType {
-                expected: "LineString",
-                actual: geometry_type_name(&other),
-            })
-        }
+        other => return Err(GeoLiteError::wrong_type("LineString", &other)),
     };
 
     if exterior.0.len() < 4 {

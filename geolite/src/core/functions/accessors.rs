@@ -13,8 +13,8 @@ use geo::{BoundingRect, Geometry};
 
 use crate::core::error::{GeoLiteError, Result};
 use crate::core::ewkb::{
-    geom_type_name, geometry_type_name, is_empty_point_blob, parse_ewkb, set_srid,
-    validate_ewkb_payload, write_ewkb, EwkbHeader, WKB_POINT,
+    geom_type_name, is_empty_point_blob, parse_ewkb, set_srid, validate_ewkb_payload, write_ewkb,
+    EwkbHeader, WKB_POINT,
 };
 use crate::core::functions::emptiness::{is_empty_geometry, is_empty_point};
 
@@ -176,10 +176,7 @@ pub fn st_x(blob: &[u8]) -> Result<Option<f64>> {
     match geom {
         Geometry::Point(p) if is_empty_point(&p) => Ok(None),
         Geometry::Point(p) => Ok(Some(p.x())),
-        other => Err(GeoLiteError::WrongType {
-            expected: "Point",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("Point", &other)),
     }
 }
 
@@ -199,10 +196,7 @@ pub fn st_y(blob: &[u8]) -> Result<Option<f64>> {
     match geom {
         Geometry::Point(p) if is_empty_point(&p) => Ok(None),
         Geometry::Point(p) => Ok(Some(p.y())),
-        other => Err(GeoLiteError::WrongType {
-            expected: "Point",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("Point", &other)),
     }
 }
 
@@ -268,10 +262,7 @@ pub fn st_num_points(blob: &[u8]) -> Result<i32> {
     let (geom, _) = parse_ewkb(blob)?;
     match geom {
         Geometry::LineString(ls) => Ok(ls.0.len() as i32),
-        other => Err(GeoLiteError::WrongType {
-            expected: "LineString",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("LineString", &other)),
     }
 }
 
@@ -354,10 +345,7 @@ pub fn st_num_interior_rings(blob: &[u8]) -> Result<i32> {
     let (geom, _) = parse_ewkb(blob)?;
     match geom {
         Geometry::Polygon(p) => Ok(p.interiors().len() as i32),
-        other => Err(GeoLiteError::WrongType {
-            expected: "Polygon",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("Polygon", &other)),
     }
 }
 
@@ -382,10 +370,7 @@ pub fn st_num_rings(blob: &[u8]) -> Result<i32> {
                 Ok(1 + p.interiors().len() as i32)
             }
         }
-        other => Err(GeoLiteError::WrongType {
-            expected: "Polygon",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("Polygon", &other)),
     }
 }
 
@@ -421,10 +406,7 @@ pub fn st_point_n(blob: &[u8], n: i32, srid: Option<i32>) -> Result<Vec<u8>> {
             })?;
             write_ewkb(&Geometry::Point(geo::Point::from(*coord)), srid)
         }
-        other => Err(GeoLiteError::WrongType {
-            expected: "LineString",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("LineString", &other)),
     }
 }
 
@@ -466,10 +448,7 @@ pub fn st_end_point(blob: &[u8]) -> Result<Vec<u8>> {
             })?;
             write_ewkb(&Geometry::Point(geo::Point::from(*last)), srid)
         }
-        other => Err(GeoLiteError::WrongType {
-            expected: "LineString",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("LineString", &other)),
     }
 }
 
@@ -489,10 +468,7 @@ pub fn st_exterior_ring(blob: &[u8]) -> Result<Vec<u8>> {
     let (geom, srid) = parse_ewkb(blob)?;
     match geom {
         Geometry::Polygon(p) => write_ewkb(&Geometry::LineString(p.exterior().clone()), srid),
-        other => Err(GeoLiteError::WrongType {
-            expected: "Polygon",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("Polygon", &other)),
     }
 }
 
@@ -529,10 +505,7 @@ pub fn st_interior_ring_n(blob: &[u8], n: i32) -> Result<Vec<u8>> {
             })?;
             write_ewkb(&Geometry::LineString(ring.clone()), srid)
         }
-        other => Err(GeoLiteError::WrongType {
-            expected: "Polygon",
-            actual: geometry_type_name(&other),
-        }),
+        other => Err(GeoLiteError::wrong_type("Polygon", &other)),
     }
 }
 
@@ -645,10 +618,7 @@ pub fn st_envelope(blob: &[u8]) -> Result<Vec<u8>> {
     }
     let rect = geom
         .bounding_rect()
-        .ok_or_else(|| GeoLiteError::WrongType {
-            expected: "non-empty geometry",
-            actual: geometry_type_name(&geom),
-        })?;
+        .ok_or_else(|| GeoLiteError::wrong_type("non-empty geometry", &geom))?;
     write_ewkb(&Geometry::Rect(rect), srid)
 }
 
