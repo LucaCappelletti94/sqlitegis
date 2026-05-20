@@ -2,10 +2,12 @@
 
 [![CI](https://github.com/LucaCappelletti94/sqlitegis/actions/workflows/ci.yml/badge.svg)](https://github.com/LucaCappelletti94/sqlitegis/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/LucaCappelletti94/sqlitegis/graph/badge.svg)](https://codecov.io/gh/LucaCappelletti94/sqlitegis)
+[![crates.io](https://img.shields.io/crates/v/sqlitegis.svg)](https://crates.io/crates/sqlitegis)
+[![docs.rs](https://img.shields.io/docsrs/sqlitegis)](https://docs.rs/sqlitegis)
 [![MSRV](https://img.shields.io/badge/MSRV-1.86-blue)](https://github.com/LucaCappelletti94/sqlitegis)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/LucaCappelletti94/sqlitegis/blob/main/LICENSE)
 
-PostGIS-style spatial functions for SQLite in pure Rust. Ships as a SQLite loadable extension (native and WASM) and as a Diesel ORM integration. Geometries travel as EWKB BLOBs, matching the PostGIS wire format so queries port between SQLite and PostGIS without rewriting. API reference and feature matrix on [docs.rs](https://docs.rs/sqlitegis).
+PostGIS-style spatial functions for SQLite in pure Rust. Ships as a SQLite loadable extension (native and WASM) and as a Diesel ORM integration. Geometries travel as EWKB BLOBs, matching the PostGIS wire format so queries port between SQLite and PostGIS without rewriting.
 
 ## SQLite extension
 
