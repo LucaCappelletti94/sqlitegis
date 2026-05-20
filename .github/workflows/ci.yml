@@ -53,18 +53,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Default features -- the most common consumer build.
           - target: workspace
             cmd: cargo clippy --workspace --all-targets -- -D warnings
+          # Union: every feature on. Covers sqlite, sqlite-extension, and
+          # diesel-sqlite implicitly, so they don't need their own entries.
           - target: workspace-all-features
             cmd: cargo clippy --workspace --all-features --all-targets -- -D warnings
-          - target: core
+          # Pure-Rust core only -- catches accidental dep leaks into core.
+          - target: no-default-features
             cmd: cargo clippy -p geolite --no-default-features --all-targets -- -D warnings
-          - target: sqlite
-            cmd: cargo clippy -p geolite --no-default-features --features sqlite --all-targets -- -D warnings
-          - target: sqlite-extension
-            cmd: cargo clippy -p geolite --no-default-features --features sqlite-extension --all-targets -- -D warnings
-          - target: diesel-sqlite
-            cmd: cargo clippy -p geolite --features diesel-sqlite --all-targets -- -D warnings
+          # Diesel without a backend -- feature-interaction check the
+          # all-features run cannot catch (it always has sqlite on too).
+          - target: diesel-only
+            cmd: cargo clippy -p geolite --no-default-features --features diesel --all-targets -- -D warnings
+          # Postgres backend -- distinct dep tree (libpq via testcontainers).
           - target: diesel-postgres
             cmd: cargo clippy -p geolite --features diesel-postgres --all-targets -- -D warnings
     steps:
@@ -98,12 +101,13 @@ jobs:
         include:
           - target: workspace
             cmd: cargo test --workspace
-          - target: diesel-sqlite
-            cmd: cargo test -p geolite --features "diesel-sqlite sqlite-extension"
+          # Default features omit sqlite-extension, so the one
+          # load_extension-gated test in sqlite_integration.rs would not run
+          # under the workspace job. Run that file alone with the feature on.
+          - target: sqlite-extension
+            cmd: cargo test -p geolite --features sqlite-extension --test sqlite_integration
           - target: doctest-workspace
             cmd: cargo test --doc --workspace
-          - target: doctest-diesel-sqlite
-            cmd: cargo test --doc -p geolite --features diesel-sqlite
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

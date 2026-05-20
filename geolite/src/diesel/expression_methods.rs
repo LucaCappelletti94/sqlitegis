@@ -64,7 +64,7 @@ use crate::diesel::types::Geometry;
 ///
 /// This trait is automatically implemented for any Diesel expression with
 /// `SqlType = Nullable<Geometry>`. Each method delegates to the corresponding
-/// free function in [`crate::functions`].
+/// free function in [`crate::diesel::functions`].
 ///
 /// For non-nullable `Geometry` columns, call `.nullable()` first -- this is
 /// the standard Diesel pattern.

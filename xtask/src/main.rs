@@ -101,24 +101,20 @@ fn precommit(full: bool) -> Result<(), String> {
             "warnings",
         ],
         vec!["cargo", "test", "--workspace"],
+        // The single sqlite-extension-gated test (the load_extension symbol
+        // check) is not exercised by --workspace because the default feature
+        // set is diesel-sqlite, not sqlite-extension. Run it explicitly here.
         vec![
             "cargo",
             "test",
             "-p",
             "geolite",
             "--features",
-            "diesel-sqlite sqlite-extension",
+            "sqlite-extension",
+            "--test",
+            "sqlite_integration",
         ],
         vec!["cargo", "test", "--doc", "--workspace"],
-        vec![
-            "cargo",
-            "test",
-            "--doc",
-            "-p",
-            "geolite",
-            "--features",
-            "diesel-sqlite",
-        ],
     ];
 
     if full {

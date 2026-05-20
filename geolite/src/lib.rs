@@ -11,9 +11,15 @@
 //!   registration against a `*mut sqlite3` connection.
 //! - `sqlite-extension` further adds the `#[no_mangle]` C entry points so
 //!   the cdylib build is loadable via SQLite's `load_extension`.
-//! - `diesel` adds backend-agnostic types ([`Geometry`], [`Geography`])
-//!   plus [`GeometryExpressionMethods`].
+//! - `diesel` adds backend-agnostic types
+//!   ([`Geometry`](crate::diesel::Geometry),
+//!   [`Geography`](crate::diesel::Geography)) plus
+//!   [`GeometryExpressionMethods`](crate::diesel::GeometryExpressionMethods).
 //! - `diesel-sqlite` / `diesel-postgres` add the backend-specific impls.
+//!
+//! Diesel users typically import via the prelude:
+//! `use geolite::prelude::*;` (re-exported from
+//! [`crate::diesel::prelude`]).
 
 pub mod core;
 pub use core::error::{GeoLiteError, Result};
@@ -26,6 +32,3 @@ pub mod diesel;
 
 #[cfg(feature = "diesel")]
 pub use diesel::prelude;
-
-#[cfg(feature = "diesel")]
-pub use diesel::{Geography, Geometry, GeometryExpressionMethods};
