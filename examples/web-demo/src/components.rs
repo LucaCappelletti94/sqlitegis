@@ -5,7 +5,7 @@ use dioxus_code::{CodeTheme, Theme};
 use dioxus_code_editor::{CodeEditor, Language};
 use dioxus_free_icons::icons::fa_solid_icons::{
     FaArrowsRotate, FaBullseye, FaCircleCheck, FaCircleDot, FaCode, FaCompass, FaDatabase,
-    FaFileCode, FaFlag, FaFont, FaMagnifyingGlass, FaPlay, FaSitemap, FaTriangleExclamation,
+    FaFileCode, FaFlag, FaFont, FaMagnifyingGlass, FaPlay, FaTriangleExclamation,
     FaVectorSquare,
 };
 use dioxus_free_icons::Icon;
@@ -74,11 +74,15 @@ pub fn SchemaPanel(on_reset: EventHandler<Result<(), String>>) -> Element {
 
 const PRESET_KNN: &str = "\
 -- Nearest cities by geodesic distance from the probe lon/lat.
-SELECT name, country, population,
-  ROUND(ST_DistanceSphere(geom, ST_Point(:lon, :lat, 4326))/1000.0,
+-- R-tree-prefiltered with a generous 10-degree bbox; ORDER BY
+-- refines the candidates by exact geodesic distance.
+SELECT p.name, p.country, p.population,
+  ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326))/1000.0,
         1) AS km,
-  ST_X(geom) AS lon, ST_Y(geom) AS lat
-FROM places
+  ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
+FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
+WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
+  AND r.ymax >= :lat - 10 AND r.ymin <= :lat + 10
 ORDER BY km LIMIT 100;";
 
 const PRESET_RADIUS: &str = "\
@@ -99,55 +103,58 @@ WHERE r.xmax >= :lon - 1000000.0/(111320.0*cos(radians(:lat)))
 ORDER BY p.population DESC;";
 
 const PRESET_ENVELOPE: &str = "\
--- Cities inside a 30x30 degree box centered on the probe point.
-SELECT name, country, population,
-  ST_X(geom) AS lon, ST_Y(geom) AS lat
-FROM places
-WHERE ST_Intersects(geom, ST_MakeEnvelope(
-  :lon - 15.0, :lat - 15.0, :lon + 15.0, :lat + 15.0, 4326
-))
-ORDER BY population DESC LIMIT 100;";
+-- Cities inside a 30x30 degree box centered on the probe.
+-- For a point-only dataset the R-tree bbox check IS the
+-- intersection test, so no ST_Intersects refinement is needed.
+SELECT p.name, p.country, p.population,
+  ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
+FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
+WHERE r.xmax >= :lon - 15.0 AND r.xmin <= :lon + 15.0
+  AND r.ymax >= :lat - 15.0 AND r.ymin <= :lat + 15.0
+ORDER BY p.population DESC LIMIT 100;";
 
 const PRESET_ASTEXT: &str = "\
 -- BLOB to WKT, for the 100 cities nearest the probe lon/lat.
-SELECT name, ST_AsText(geom) AS wkt,
-  ST_X(geom) AS lon, ST_Y(geom) AS lat
-FROM places
-ORDER BY ST_DistanceSphere(geom, ST_Point(:lon, :lat, 4326))
-LIMIT 100;";
-
-const PRESET_RTREE: &str = "\
--- Nearest cities via R-tree prefilter then geodesic refinement.
--- The JOIN against places_geom_rtree narrows by bounding box in
--- O(log N). ST_DistanceSphere then refines to true geodesic order.
-SELECT p.name, p.country, p.population,
-  ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326))/1000.0,
-        1) AS km,
+-- R-tree-prefiltered with a 10-degree bbox; ORDER BY refines.
+SELECT p.name, ST_AsText(p.geom) AS wkt,
   ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
 FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
 WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
   AND r.ymax >= :lat - 10 AND r.ymin <= :lat + 10
-ORDER BY km LIMIT 100;";
+ORDER BY ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326))
+LIMIT 100;";
 
 const PRESET_EXPLAIN: &str = "\
--- See how SQLite plans the index-aware lookup. Look for
+-- Query plan for the indexed nearest-cities lookup. Look for
 -- `VIRTUAL TABLE INDEX places_geom_rtree` in the output.
 EXPLAIN QUERY PLAN
-SELECT p.name FROM places p
-JOIN places_geom_rtree r ON p.rowid = r.id
-WHERE r.xmax >= :lon - 5 AND r.xmin <= :lon + 5
-  AND r.ymax >= :lat - 5 AND r.ymin <= :lat + 5;";
+SELECT p.name, p.country, p.population,
+  ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) AS d
+FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
+WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
+  AND r.ymax >= :lat - 10 AND r.ymin <= :lat + 10
+ORDER BY d LIMIT 100;";
 
 const PRESET_COUNTRIES: &str = "\
 -- Top countries by city count within 3000 km of the probe.
-SELECT country, COUNT(*) AS cities, SUM(population) AS total_pop
-FROM places
-WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 3000000.0)
-GROUP BY country
+-- R-tree bbox prefilter (dlon scales with 1/cos(lat)) then exact
+-- ST_DWithinSphere for the 3000 km circle.
+SELECT p.country, COUNT(*) AS cities,
+  SUM(p.population) AS total_pop
+FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
+WHERE r.xmax >= :lon - 3000000.0/(111320.0*cos(radians(:lat)))
+  AND r.xmin <= :lon + 3000000.0/(111320.0*cos(radians(:lat)))
+  AND r.ymax >= :lat - 3000000.0/111320.0
+  AND r.ymin <= :lat + 3000000.0/111320.0
+  AND ST_DWithinSphere(p.geom,
+                       ST_Point(:lon, :lat, 4326), 3000000.0)
+GROUP BY p.country
 ORDER BY cities DESC LIMIT 100;";
 
 const PRESET_RINGS: &str = "\
 -- Population in concentric rings around the probe (up to 3000 km).
+-- R-tree prefilter inside the CTE; the CASE then bins the exact
+-- geodesic distance into bands.
 SELECT
   CASE
     WHEN d <=  500000 THEN '0-500 km'
@@ -157,19 +164,27 @@ SELECT
   END AS ring,
   COUNT(*) AS cities, SUM(population) AS total_pop
 FROM (
-  SELECT population,
-    ST_DistanceSphere(geom, ST_Point(:lon, :lat, 4326)) AS d
-  FROM places
-  WHERE ST_DWithinSphere(geom, ST_Point(:lon, :lat, 4326), 3000000.0)
+  SELECT p.population,
+    ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) AS d
+  FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
+  WHERE r.xmax >= :lon - 3000000.0/(111320.0*cos(radians(:lat)))
+    AND r.xmin <= :lon + 3000000.0/(111320.0*cos(radians(:lat)))
+    AND r.ymax >= :lat - 3000000.0/111320.0
+    AND r.ymin <= :lat + 3000000.0/111320.0
+    AND ST_DWithinSphere(p.geom,
+                         ST_Point(:lon, :lat, 4326), 3000000.0)
 )
 GROUP BY ring ORDER BY MIN(d);";
 
 const PRESET_GEOJSON: &str = "\
 -- Serialize the 100 cities nearest the probe to GeoJSON.
-SELECT name, country, ST_AsGeoJSON(geom) AS geojson,
-  ST_X(geom) AS lon, ST_Y(geom) AS lat
-FROM places
-ORDER BY ST_DistanceSphere(geom, ST_Point(:lon, :lat, 4326))
+-- R-tree-prefiltered with a 10-degree bbox; ORDER BY refines.
+SELECT p.name, p.country, ST_AsGeoJSON(p.geom) AS geojson,
+  ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
+FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
+WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
+  AND r.ymax >= :lat - 10 AND r.ymin <= :lat + 10
+ORDER BY ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326))
 LIMIT 100;";
 
 #[component]
@@ -217,7 +232,7 @@ pub fn QueryPanel(
             div { class: "presets",
                 PresetChip {
                     label: "KNN",
-                    description: "Find the 10 cities closest to the probe point, ranked by geodesic distance on the WGS84 ellipsoid",
+                    description: "Find the 100 cities closest to the probe point, R-tree prefiltered and ranked by geodesic distance on the WGS84 ellipsoid",
                     icon: rsx! { Icon { width: 11, height: 11, icon: FaBullseye, class: "btn-icon".to_string() } },
                     active: active_preset.read().as_str() == "KNN",
                     on_pick: move |_| {
@@ -260,18 +275,6 @@ pub fn QueryPanel(
                         let new_sql = PRESET_ASTEXT.to_string();
                         sql.set(new_sql.clone());
                         active_preset.set("AsText".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "RTree",
-                    description: "Same KNN result, but with an explicit JOIN against the R-tree shadow table so the SQLite virtual-table index actually drives the prefilter",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaSitemap, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "RTree",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_RTREE.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("RTree".to_string());
                         on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
                     },
                 }

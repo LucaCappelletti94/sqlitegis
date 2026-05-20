@@ -147,11 +147,13 @@ fn App() -> Element {
                     }
                 }
                 p { class: "intro", lang: "en",
-                    "SQLiteGIS brings "
+                    strong { class: "brand-sqlitegis", "SQLiteGIS" }
+                    " brings "
                     a {
                         href: "https://postgis.net/",
                         rel: "noopener",
                         target: "_blank",
+                        class: "brand-postgis",
                         "PostGIS"
                     }
                     "-style spatial SQL to "
@@ -159,6 +161,7 @@ fn App() -> Element {
                         href: "https://sqlite.org/",
                         rel: "noopener",
                         target: "_blank",
+                        class: "brand-sqlite",
                         "SQLite"
                     }
                     ", in pure "
@@ -166,6 +169,7 @@ fn App() -> Element {
                         href: "https://www.rust-lang.org/",
                         rel: "noopener",
                         target: "_blank",
+                        class: "brand-rust",
                         "Rust"
                     }
                     ", with "
@@ -173,6 +177,7 @@ fn App() -> Element {
                         href: "https://diesel.rs/",
                         rel: "noopener",
                         target: "_blank",
+                        class: "brand-diesel",
                         "Diesel"
                     }
                     " ORM bindings. Geometries are "
@@ -182,12 +187,20 @@ fn App() -> Element {
                         target: "_blank",
                         "EWKB"
                     }
-                    " BLOBs in PostGIS's wire format, so queries port unmodified. "
-                    "Runs in your browser via "
+                    " BLOBs in "
+                    a {
+                        href: "https://postgis.net/",
+                        rel: "noopener",
+                        target: "_blank",
+                        class: "brand-postgis",
+                        "PostGIS"
+                    }
+                    "'s wire format, so queries port unmodified. Runs in your browser via "
                     a {
                         href: "https://webassembly.org/",
                         rel: "noopener",
                         target: "_blank",
+                        class: "brand-wasm",
                         "WebAssembly"
                     }
                     ". Try it on the "
