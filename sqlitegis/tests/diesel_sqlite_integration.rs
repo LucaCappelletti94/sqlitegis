@@ -519,3 +519,122 @@ fn catalog_semantic_goldens_via_diesel_sqlite() {
         }
     }
 }
+
+// -- dwithin_sphere_indexed_sql query helper ---------------------------------
+
+#[derive(QueryableByName, Debug)]
+struct IdRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    id: i64,
+}
+
+fn seed_radius_cities(c: &mut SqliteConnection, table: &str) {
+    sql_query(format!(
+        "CREATE TABLE {table} (id INTEGER PRIMARY KEY, geom BLOB)"
+    ))
+    .execute(c)
+    .unwrap();
+    // Deterministic global grid: latitudes -60..=60 step 10, longitudes
+    // -180..=180 step 15. 13 * 25 = 325 rows covering equator, mid, and
+    // high latitudes in both hemispheres.
+    let mut id: i64 = 1;
+    for lat in (-60..=60).step_by(10) {
+        for lon in (-180..=180).step_by(15) {
+            sql_query(format!(
+                "INSERT INTO {table} (id, geom) \
+                 VALUES ({id}, ST_Point({lon}.0, {lat}.0, 4326))"
+            ))
+            .execute(c)
+            .unwrap();
+            id += 1;
+        }
+    }
+    sql_query(format!("SELECT CreateSpatialIndex('{table}', 'geom')"))
+        .execute(c)
+        .unwrap();
+}
+
+/// The helper's output matches the naive `ST_DWithinSphere`-only scan
+/// across multiple probe points at varied latitudes. Catches both
+/// correctness regressions in the bbox math and stale shadow-table
+/// assumptions.
+#[test]
+fn dwithin_sphere_indexed_matches_naive() {
+    use sqlitegis::diesel::query_helpers::dwithin_sphere_indexed_sql;
+
+    let mut c = conn();
+    seed_radius_cities(&mut c, "radius_cities");
+
+    let probes = [
+        (0.0_f64, 0.0_f64), // equator
+        (13.4, 52.5),       // Berlin
+        (-122.4, 37.8),     // San Francisco
+        (139.7, 35.7),      // Tokyo
+        (0.0, 60.0),        // high lat
+        (-60.0, -30.0),     // southern hemisphere
+    ];
+    let radius_m = 2_000_000.0;
+
+    for (lon, lat) in probes {
+        let naive: Vec<IdRow> = sql_query(format!(
+            "SELECT id FROM radius_cities \
+             WHERE ST_DWithinSphere(geom, ST_Point({lon}, {lat}, 4326), {radius_m})"
+        ))
+        .load(&mut c)
+        .unwrap();
+
+        let indexed: Vec<IdRow> =
+            dwithin_sphere_indexed_sql("radius_cities", "geom", (lon, lat), radius_m, "t.id")
+                .load::<IdRow>(&mut c)
+                .unwrap();
+
+        let mut naive_ids: Vec<i64> = naive.iter().map(|r| r.id).collect();
+        let mut indexed_ids: Vec<i64> = indexed.iter().map(|r| r.id).collect();
+        naive_ids.sort();
+        indexed_ids.sort();
+        assert_eq!(
+            naive_ids,
+            indexed_ids,
+            "probe ({lon}, {lat}) r={radius_m} m: naive {} vs indexed {}",
+            naive_ids.len(),
+            indexed_ids.len(),
+        );
+        // Sanity: the radius is large enough that something matches.
+        assert!(
+            !indexed_ids.is_empty(),
+            "expected at least one match for probe ({lon}, {lat})",
+        );
+    }
+}
+
+/// The helper's SQL engages the R-tree shadow table. We wrap its SQL in
+/// EXPLAIN QUERY PLAN and check the planner mentions the shadow table,
+/// which proves the JOIN didn't degrade to a scan over the base.
+#[test]
+fn dwithin_sphere_indexed_uses_rtree_plan() {
+    use sqlitegis::diesel::query_helpers::dwithin_sphere_indexed_sql_string;
+
+    let mut c = conn();
+    seed_radius_cities(&mut c, "radius_cities_plan");
+
+    let sql = dwithin_sphere_indexed_sql_string(
+        "radius_cities_plan",
+        "geom",
+        (0.0, 0.0),
+        1_000_000.0,
+        "t.id",
+    );
+    let plan: Vec<PlanRow> = sql_query(format!("EXPLAIN QUERY PLAN {sql}"))
+        .load(&mut c)
+        .unwrap();
+    // SQLite's planner refers to the joined R-tree by its alias `r` and
+    // tags it `VIRTUAL TABLE INDEX <hex>`. We accept either the literal
+    // shadow-table name or that virtual-index marker as proof the JOIN
+    // engages the R-tree rather than scanning the base table.
+    assert!(
+        plan.iter()
+            .any(|row| row.detail.contains("radius_cities_plan_geom_rtree")
+                || row.detail.contains("VIRTUAL TABLE INDEX")),
+        "expected plan to engage the R-tree, got: {plan:?}",
+    );
+}

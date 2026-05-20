@@ -305,6 +305,51 @@
 //!   queries, clamp `dlon` to 360 deg or use a full-scan fallback.
 //! - All geometries must have SRID 4326 for the geodesic functions.
 //!
+//! ### Using the built-in helper
+//!
+//! SQLite's query planner cannot rewrite a scalar `ST_DWithinSphere(...)`
+//! predicate into an R-tree plan the way PostgreSQL's GIST operator
+//! classes do for PostGIS. The shadow `*_geom_rtree` virtual table has
+//! to be JOINed explicitly. To avoid retyping the prefilter+refinement
+//! template for every radius query, SQLiteGIS exposes a free function
+//! that builds the exact SQL above with the right bounding-box math:
+//!
+//! ```rust,no_run
+//! # #[cfg(feature = "diesel-sqlite")]
+//! # fn _example() -> Result<(), Box<dyn std::error::Error>> {
+//! use diesel::{Connection, RunQueryDsl, sqlite::SqliteConnection};
+//! use diesel::deserialize::QueryableByName;
+//! use diesel::sql_types::{BigInt, Text};
+//! use sqlitegis::diesel::query_helpers::dwithin_sphere_indexed_sql;
+//!
+//! #[derive(QueryableByName)]
+//! struct City {
+//!     #[diesel(sql_type = BigInt)]
+//!     id: i64,
+//!     #[diesel(sql_type = Text)]
+//!     name: String,
+//! }
+//!
+//! let mut conn = SqliteConnection::establish(":memory:")?;
+//! let rows: Vec<City> = dwithin_sphere_indexed_sql(
+//!     "places", "geom", (13.4, 52.5), 1_000_000.0,
+//!     "t.id, t.name",
+//! ).load::<City>(&mut conn)?;
+//! # let _ = rows;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! [`crate::diesel::query_helpers::radius_bbox`] is also exported on its
+//! own for callers who want to keep writing their own SQL: it returns the
+//! `(dlon, dlat)` offsets with the same pole-safe clamp the helper above
+//! uses internally.
+//!
+//! `table` and `geom_column` are interpolated into the SQL as identifiers
+//! (`[...]`-quoted, not bound parameters), so they must be trusted strings
+//! controlled by your code. Numeric inputs (`probe`, `radius_m`) are
+//! formatted as `f64` literals, which is injection-safe.
+//!
 //! ---
 //!
 //! ## Pattern 5: KNN Nearest-N (Planar)

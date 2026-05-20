@@ -11,4 +11,7 @@
 
 pub use crate::diesel::expression_methods::GeometryExpressionMethods;
 pub use crate::diesel::functions::*;
+pub use crate::diesel::query_helpers::{
+    dwithin_sphere_indexed_sql, dwithin_sphere_indexed_sql_string, radius_bbox, RadiusBbox,
+};
 pub use crate::diesel::types::{Geography, Geometry};
