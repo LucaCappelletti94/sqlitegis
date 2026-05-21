@@ -1,14 +1,14 @@
 //! EWKB (Extended Well-Known Binary) parser and writer.
 //!
 //! Wire format:
-//!   [0x01|0x00]: byte order marker (little-endian or big-endian)
-//!   [u32]: geometry type with flags (in the declared byte order)
+//!   \[0x01|0x00\]: byte order marker (little-endian or big-endian)
+//!   \[u32\]: geometry type with flags (in the declared byte order)
 //!     Bit 29 (0x20000000): SRID present
 //!     Bit 31 (0x80000000): Z dimension
 //!     Bit 30 (0x40000000): M dimension
 //!     Bits 0-28: geometry type (1=Point, 2=LineString, etc.)
-//!   [i32]: SRID (only when SRID flag set, in declared byte order)
-//!   [rest]: ISO WKB geometry payload
+//!   \[i32\]: SRID (only when SRID flag set, in declared byte order)
+//!   \[rest\]: ISO WKB geometry payload
 
 use geo::{Geometry, Point};
 use geozero::wkb::Ewkb;
