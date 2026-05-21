@@ -5,7 +5,7 @@ edition = "2021"
 rust-version.workspace = true
 authors = ["Luca Cappelletti"]
 license = "MIT OR Apache-2.0"
-description = "SQLiteGIS: PostGIS-style spatial functions for SQLite in pure Rust. SQLite loadable extension and Diesel ORM integration behind feature flags."
+description = "SQLiteGIS: PostGIS-style spatial functions for SQLite in pure Rust."
 readme = "README.md"
 repository = "https://github.com/LucaCappelletti94/sqlitegis"
 homepage = "https://github.com/LucaCappelletti94/sqlitegis"
@@ -133,7 +133,7 @@ resolver = "2"
 rust-version = "1.86"
 
 [workspace.dependencies]
-geo = { version = "0.32", default-features = false }
+geo = { version = "0.33", default-features = false }
 libsqlite3-sys = { version = ">=0.17.2, <0.36.0" }
 
 [profile.release]
