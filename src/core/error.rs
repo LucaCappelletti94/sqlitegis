@@ -3,6 +3,30 @@ use thiserror::Error;
 use crate::core::ewkb::geometry_type_name;
 
 /// Errors returned by SQLiteGIS's core, SQLite, and Diesel layers.
+///
+/// A typical match handling looks like:
+///
+/// ```
+/// use sqlitegis::SqliteGisError;
+/// use sqlitegis::core::functions::constructors::st_point;
+/// use sqlitegis::core::functions::measurement::st_distance;
+///
+/// let a = st_point(0.0, 0.0, None).unwrap();
+/// let b = st_point(3.0, 4.0, None).unwrap();
+/// match st_distance(&a, &b) {
+///     Ok(d) => assert!((d - 5.0).abs() < 1e-10),
+///     Err(SqliteGisError::InvalidEwkb(_msg)) => {
+///         // malformed BLOB on input
+///     }
+///     Err(SqliteGisError::WrongType { expected, actual }) => {
+///         eprintln!("expected {expected}, got {actual}");
+///     }
+///     Err(SqliteGisError::InvalidInput(_msg)) => {
+///         // semantically rejected (e.g. non-finite coordinate)
+///     }
+///     Err(_other) => {}
+/// }
+/// ```
 #[derive(Debug, Error)]
 pub enum SqliteGisError {
     /// The supplied bytes did not parse as a valid EWKB BLOB.

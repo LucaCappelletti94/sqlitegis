@@ -47,6 +47,17 @@ fn read_f64(bytes: [u8; 8], little_endian: bool) -> f64 {
 }
 
 /// Reject Z/M coordinate layouts when the operation can only process XY.
+///
+/// ```
+/// use sqlitegis::core::ewkb::ensure_xy_only;
+/// use sqlitegis::SqliteGisError;
+///
+/// assert!(ensure_xy_only(false, false).is_ok());
+/// assert!(matches!(
+///     ensure_xy_only(true, false),
+///     Err(SqliteGisError::UnsupportedDimensions { dimensions: "Z" }),
+/// ));
+/// ```
 pub fn ensure_xy_only(has_z: bool, has_m: bool) -> Result<()> {
     let dimensions = if has_z && has_m {
         "ZM"
@@ -85,6 +96,17 @@ fn point_is_empty_with_header(blob: &[u8], header: &EwkbHeader) -> Result<bool> 
 }
 
 /// Return true when the EWKB blob encodes `POINT EMPTY`.
+///
+/// ```
+/// use sqlitegis::core::ewkb::is_empty_point_blob;
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let empty = geom_from_text("POINT EMPTY", None).unwrap();
+/// assert!(is_empty_point_blob(&empty).unwrap());
+///
+/// let real = geom_from_text("POINT(1 2)", None).unwrap();
+/// assert!(!is_empty_point_blob(&real).unwrap());
+/// ```
 pub fn is_empty_point_blob(blob: &[u8]) -> Result<bool> {
     let header = parse_ewkb_header(blob)?;
     point_is_empty_with_header(blob, &header)
@@ -94,6 +116,15 @@ pub fn is_empty_point_blob(blob: &[u8]) -> Result<bool> {
 ///
 /// This helper is intended for metadata-oriented functions that must verify
 /// wire correctness but do not need to deserialize into an XY geometry.
+///
+/// ```
+/// use sqlitegis::core::ewkb::validate_ewkb_payload;
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let blob = geom_from_text("POINT(1 2)", Some(4326)).unwrap();
+/// let hdr = validate_ewkb_payload(&blob).unwrap();
+/// assert_eq!(hdr.srid, Some(4326));
+/// ```
 pub fn validate_ewkb_payload(blob: &[u8]) -> Result<EwkbHeader> {
     let header = parse_ewkb_header(blob)?;
     if !point_is_empty_with_header(blob, &header)? {
@@ -103,6 +134,19 @@ pub fn validate_ewkb_payload(blob: &[u8]) -> Result<EwkbHeader> {
 }
 
 /// Validate EWKB header + payload and enforce XY-only coordinate dimensions.
+///
+/// Rejects Z, M, and ZM geometries via [`ensure_xy_only`] after validating
+/// the wire format. The XY-only contract matches what every spatial
+/// function in `crate::core::functions` accepts on input.
+///
+/// ```
+/// use sqlitegis::core::ewkb::validate_xy_ewkb_payload;
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let xy = geom_from_text("POINT(1 2)", Some(4326)).unwrap();
+/// let hdr = validate_xy_ewkb_payload(&xy).unwrap();
+/// assert!(!hdr.has_z && !hdr.has_m);
+/// ```
 pub fn validate_xy_ewkb_payload(blob: &[u8]) -> Result<EwkbHeader> {
     let header = validate_ewkb_payload(blob)?;
     ensure_xy_only(header.has_z, header.has_m)?;
@@ -395,6 +439,15 @@ pub fn set_srid(blob: &[u8], new_srid: i32) -> Result<Vec<u8>> {
 }
 
 /// Return a static string naming the variant of a `geo::Geometry` value (for diagnostics).
+///
+/// ```
+/// use sqlitegis::core::ewkb::{geometry_type_name, parse_ewkb};
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let blob = geom_from_text("POLYGON((0 0, 1 0, 1 1, 0 0))", None).unwrap();
+/// let (geom, _srid) = parse_ewkb(&blob).unwrap();
+/// assert_eq!(geometry_type_name(&geom), "Polygon");
+/// ```
 pub fn geometry_type_name(geom: &Geometry<f64>) -> &'static str {
     match geom {
         Geometry::Point(_) => "Point",

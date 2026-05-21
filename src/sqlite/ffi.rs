@@ -1800,6 +1800,49 @@ unsafe fn reg(db: *mut sqlite3, name: &str, n_arg: c_int, flags: c_int, xfunc: X
 ///
 /// # Safety
 /// `db` must be a valid, open SQLite database handle for the lifetime of the call.
+///
+/// # Example
+///
+/// Open an in-memory connection via the raw `libsqlite3-sys` FFI, register
+/// the SQLiteGIS spatial functions, then call one from SQL:
+///
+/// ```rust,no_run
+/// # #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
+/// # fn main() {
+/// use std::ffi::{CStr, CString};
+/// use std::ptr;
+/// use libsqlite3_sys::{
+///     sqlite3, sqlite3_close, sqlite3_column_text, sqlite3_finalize,
+///     sqlite3_open, sqlite3_prepare_v2, sqlite3_step,
+///     SQLITE_OK, SQLITE_ROW,
+/// };
+///
+/// unsafe {
+///     let mut db: *mut sqlite3 = ptr::null_mut();
+///     let path = CString::new(":memory:").unwrap();
+///     assert_eq!(sqlite3_open(path.as_ptr(), &mut db), SQLITE_OK);
+///
+///     // Wire SQLiteGIS's spatial functions into this connection.
+///     assert_eq!(sqlitegis::sqlite::register_functions(db), SQLITE_OK);
+///
+///     // ST_AsText, ST_Point, and the rest of the catalogue are now
+///     // callable from any prepared statement on this handle.
+///     let sql = CString::new("SELECT ST_AsText(ST_Point(1.0, 2.0, 4326))").unwrap();
+///     let mut stmt = ptr::null_mut();
+///     assert_eq!(
+///         sqlite3_prepare_v2(db, sql.as_ptr(), -1, &mut stmt, ptr::null_mut()),
+///         SQLITE_OK,
+///     );
+///     assert_eq!(sqlite3_step(stmt), SQLITE_ROW);
+///     let text = CStr::from_ptr(sqlite3_column_text(stmt, 0).cast());
+///     assert_eq!(text.to_str().unwrap(), "POINT(1 2)");
+///     sqlite3_finalize(stmt);
+///     sqlite3_close(db);
+/// }
+/// # }
+/// # #[cfg(not(all(feature = "sqlite", not(target_arch = "wasm32"))))]
+/// # fn main() {}
+/// ```
 pub unsafe fn register_functions(db: *mut sqlite3) -> c_int {
     for callback in SQLITE_DETERMINISTIC_CALLBACKS {
         let rc = reg(

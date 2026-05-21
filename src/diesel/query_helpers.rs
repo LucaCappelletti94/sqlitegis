@@ -75,6 +75,19 @@ const METRES_PER_DEGREE: f64 = 111_320.0;
 ///
 /// The clamp at 180° applies whenever `cos(lat)` falls below 1e-6, which
 /// happens within roughly 0.00006° of the pole.
+///
+/// ```rust
+/// use sqlitegis::diesel::query_helpers::radius_bbox;
+///
+/// let equator = radius_bbox(0.0, 1_000_000.0);
+/// let berlin = radius_bbox(52.5, 1_000_000.0);
+/// // dlat is constant; dlon grows with |lat| because longitude shrinks.
+/// assert!((equator.dlat - berlin.dlat).abs() < 1e-9);
+/// assert!(berlin.dlon > equator.dlon);
+///
+/// // Near the pole dlon saturates at 180 rather than diverging.
+/// assert_eq!(radius_bbox(89.9999, 1_000_000.0).dlon, 180.0);
+/// ```
 pub fn radius_bbox(lat_deg: f64, radius_m: f64) -> RadiusBbox {
     let dlat = radius_m / METRES_PER_DEGREE;
     let cos_lat = lat_deg.to_radians().cos().abs().max(1.0e-6);
@@ -153,6 +166,16 @@ pub fn dwithin_sphere_indexed_sql(
 /// Same inputs and contract, useful when the caller needs the raw SQL
 /// (for logging, for prepending `EXPLAIN QUERY PLAN`, or for piping it
 /// through `diesel::sql_query` together with extra binds).
+///
+/// ```rust
+/// use sqlitegis::diesel::query_helpers::dwithin_sphere_indexed_sql_string;
+///
+/// let sql = dwithin_sphere_indexed_sql_string(
+///     "places", "geom", (13.4, 52.5), 1_000_000.0, "t.id, t.name",
+/// );
+/// assert!(sql.contains("JOIN [places_geom_rtree]"));
+/// assert!(sql.contains("ST_DWithinSphere"));
+/// ```
 pub fn dwithin_sphere_indexed_sql_string(
     table: &str,
     geom_column: &str,
@@ -243,6 +266,16 @@ pub fn intersects_window_indexed_sql(
 /// Same inputs and contract, useful when the caller needs the raw SQL
 /// (for logging, for prepending `EXPLAIN QUERY PLAN`, or for piping it
 /// through `diesel::sql_query` together with extra binds).
+///
+/// ```rust
+/// use sqlitegis::diesel::query_helpers::intersects_window_indexed_sql_string;
+///
+/// let sql = intersects_window_indexed_sql_string(
+///     "places", "geom", (-1.6, 37.5, 28.4, 67.5), "t.id, t.name",
+/// );
+/// assert!(sql.contains("JOIN [places_geom_rtree]"));
+/// assert!(sql.contains("ST_MakeEnvelope(-1.6, 37.5, 28.4, 67.5, 4326)"));
+/// ```
 pub fn intersects_window_indexed_sql_string(
     table: &str,
     geom_column: &str,
@@ -333,6 +366,17 @@ pub fn nearest_sphere_indexed_sql(
 /// Same inputs and contract, useful when the caller needs the raw SQL
 /// (for logging, for prepending `EXPLAIN QUERY PLAN`, or for piping it
 /// through `diesel::sql_query` together with extra binds).
+///
+/// ```rust
+/// use sqlitegis::diesel::query_helpers::nearest_sphere_indexed_sql_string;
+///
+/// let sql = nearest_sphere_indexed_sql_string(
+///     "places", "geom", (13.4, 52.5), 1_000_000.0, 10, "t.id, t.name",
+/// );
+/// assert!(sql.contains("JOIN [places_geom_rtree]"));
+/// assert!(sql.contains("ORDER BY ST_DistanceSphere"));
+/// assert!(sql.contains("LIMIT 10"));
+/// ```
 pub fn nearest_sphere_indexed_sql_string(
     table: &str,
     geom_column: &str,
