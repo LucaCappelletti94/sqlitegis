@@ -7,7 +7,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-blue)](https://github.com/LucaCappelletti94/sqlitegis)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/LucaCappelletti94/sqlitegis/blob/main/LICENSE)
 
-PostGIS-style spatial functions for SQLite in pure Rust. Ships as a SQLite loadable extension (native and WASM) and as a Diesel ORM integration. Geometries travel as EWKB BLOBs, matching the PostGIS wire format so queries port between SQLite and PostGIS without rewriting.
+[PostGIS](https://postgis.net/)-style spatial functions for [SQLite](https://www.sqlite.org/) in pure [Rust](https://www.rust-lang.org/). Ships as a SQLite loadable extension (native and [WebAssembly](https://webassembly.org/)) and as a [Diesel](https://diesel.rs/) ORM integration. Geometries travel as [EWKB](https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry#Well-known_binary) BLOBs, matching the PostGIS wire format so queries port between SQLite and PostGIS without rewriting.
 
 ## SQLite extension
 
@@ -54,7 +54,7 @@ let _query = features::table
 # }
 ```
 
-`CreateSpatialIndex` and `DropSpatialIndex` are DDL helpers without typed wrappers, called through `diesel::sql_query`. R-tree-backed queries run 50 to 60x faster than the non-indexed equivalents (see Benchmarks).
+`CreateSpatialIndex` and `DropSpatialIndex` are DDL helpers without typed wrappers, called through `diesel::sql_query`. [R-tree](https://en.wikipedia.org/wiki/R-tree)-backed queries run 50 to 60x faster than the non-indexed equivalents (see Benchmarks).
 
 ## Notes
 
@@ -62,7 +62,7 @@ Geodesic functions (`ST_DistanceSphere`, `ST_DistanceSpheroid`, `ST_LengthSphere
 
 ## Benchmarks
 
-Criterion central estimates on the included R-tree workloads:
+[Criterion](https://github.com/bheisler/criterion.rs) central estimates on the included R-tree workloads:
 
 | Scenario | Indexed | Non-indexed | Speedup |
 | --- | ---: | ---: | ---: |
@@ -71,7 +71,7 @@ Criterion central estimates on the included R-tree workloads:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](https://github.com/LucaCappelletti94/sqlitegis/blob/main/CONTRIBUTING.md).
 
 ## License
 

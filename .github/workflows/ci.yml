@@ -198,6 +198,35 @@ jobs:
       - run: cargo install cargo-audit --quiet
       - run: cargo audit
 
+  # README is included verbatim into the crate root docs via
+  # include_str! in src/lib.rs, so any relative markdown link there
+  # gets resolved against docs.rs/sqlitegis/latest/sqlitegis/ instead
+  # of the GitHub repo and produces a 404. Two layers of defence:
+  # a regex grep that fails fast on the exact mistake, and lychee for
+  # the full external-link audit (docs.rs URLs, crates.io URLs,
+  # PostGIS/SQLite/Diesel reference links in the prose).
+  link-check:
+    name: Doc Link Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Forbid relative links to repo files in README
+        run: |
+          # Match markdown links whose target does not start with http:
+          # https:, mailto:, #, or a known intra-doc scheme. Allow image
+          # data: URLs by skipping <... preceded by !. Fail with file:line
+          # output so the violation is obvious in the run summary.
+          if grep -nE '[^!]\]\(([^h#m][^)]*\.(md|rs|toml|yml|yaml|svg|png))\)' README.md; then
+            echo "::error file=README.md::Relative link to a repo file detected. include_str! in lib.rs makes docs.rs resolve relative paths against docs.rs/<crate>/latest/, so these must use absolute https://github.com/... URLs." >&2
+            exit 1
+          fi
+      - name: Lychee external link audit
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --max-concurrency 4 --exclude-loopback README.md CONTRIBUTING.md
+          fail: true
+
   test-postgres:
     name: Test (PostGIS)
     runs-on: ubuntu-latest
