@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -73,7 +73,7 @@ jobs:
           - target: diesel-postgres
             cmd: cargo clippy -p sqlitegis --features diesel-postgres --all-targets -- -D warnings
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -111,7 +111,7 @@ jobs:
           - target: doctest-workspace
             cmd: cargo test --doc --workspace
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: ${{ matrix.cmd }}
@@ -121,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.86.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace
@@ -137,7 +137,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace
@@ -149,7 +149,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -165,7 +165,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -181,7 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --no-deps
@@ -193,7 +193,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --quiet
       - run: cargo audit
@@ -203,10 +203,245 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p sqlitegis --features diesel-postgres --test diesel_postgres_integration
+
+  # Cross-compile the library for the iOS device, iOS simulator, and Android
+  # arm64 targets. Compile-only check (no test execution), but catches link
+  # regressions and missing target-conditional code paths before the slower
+  # simulator/emulator jobs run.
+  mobile-build:
+    name: Mobile Build Check (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: iOS Device (arm64)
+            os: macos-latest
+            target: aarch64-apple-ios
+          - name: iOS Simulator (arm64)
+            os: macos-latest
+            target: aarch64-apple-ios-sim
+          - name: Android (arm64)
+            os: ubuntu-latest
+            target: aarch64-linux-android
+            setup_android_ndk: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Setup Android NDK
+        if: matrix.setup_android_ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+      - name: Configure Android toolchain env
+        if: matrix.setup_android_ndk
+        run: |
+          echo "CC_aarch64_linux_android=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
+
+      - name: Check mobile build
+        run: cargo check -p sqlitegis --lib --features bundled-sqlite --target ${{ matrix.target }}
+
+  # Boot a real iOS simulator via xcrun simctl and run the sqlitegis test
+  # suite through it as the cargo test runner. Catches runtime regressions
+  # the compile-only mobile-build job cannot see (e.g. SQLite linkage to
+  # the iOS Security framework, geo/geozero floating-point quirks).
+  ios:
+    name: iOS Simulator Tests
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+      - name: Show Xcode version
+        run: xcodebuild -version
+      - name: Check iOS device target build
+        run: cargo check -p sqlitegis --features bundled-sqlite --target aarch64-apple-ios
+      - name: Boot iOS simulator
+        run: |
+          RUNTIME_JSON="$(xcrun simctl list runtimes --json \
+            | jq -c '.runtimes
+              | map(select(.isAvailable == true))
+              | map(select(.name | contains("iOS")))
+              | .[-1]')"
+          RUNTIME_ID="$(echo "$RUNTIME_JSON" | jq -r '.identifier')"
+          DEVICE_TYPE_ID="$(echo "$RUNTIME_JSON" \
+            | jq -r '.supportedDeviceTypes
+              | map(select(.productFamily == "iPhone"))
+              | .[0].identifier')"
+
+          if [ -z "$RUNTIME_ID" ] || [ "$RUNTIME_ID" = "null" ]; then
+            echo "No available iOS simulator runtime found"
+            exit 1
+          fi
+          if [ -z "$DEVICE_TYPE_ID" ] || [ "$DEVICE_TYPE_ID" = "null" ]; then
+            echo "No available iPhone simulator device type found"
+            exit 1
+          fi
+
+          SIM_UDID="$(xcrun simctl create ci-rust-ios "$DEVICE_TYPE_ID" "$RUNTIME_ID")"
+          echo "SIMULATOR_UDID=$SIM_UDID" >> "$GITHUB_ENV"
+          echo "Selected runtime: $RUNTIME_ID"
+          echo "Selected device type: $DEVICE_TYPE_ID"
+          echo "Created simulator: $SIM_UDID"
+
+          xcrun simctl boot "$SIM_UDID"
+          xcrun simctl bootstatus "$SIM_UDID" -b
+      - name: Run iOS simulator tests
+        run: cargo test -p sqlitegis --features bundled-sqlite --target aarch64-apple-ios-sim --locked
+        env:
+          CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER: >-
+            xcrun simctl spawn ${{ env.SIMULATOR_UDID }}
+      - name: Cleanup iOS simulator
+        if: always()
+        run: |
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl shutdown "$SIMULATOR_UDID" || true
+            xcrun simctl delete "$SIMULATOR_UDID" || true
+          fi
+
+  # Boot an Android x86_64 emulator and run the library tests through it.
+  # cargo-ndk wires the NDK toolchain into cargo so test binaries link
+  # against the emulator's bionic libc + system SQLite. Lib-only because
+  # the integration tests assume a host filesystem that the emulator
+  # cannot reach.
+  android-test:
+    name: Android Emulator Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run Android emulator tests
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          profile: pixel_6
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: cargo ndk-test -t x86_64 -p sqlitegis --features bundled-sqlite --lib --locked
+
+  # Native runtime tests on ARM64 Linux. Covers the case where sqlitegis
+  # is embedded in a server or workstation running aarch64 Linux (Graviton,
+  # Ampere, Raspberry Pi 4/5).
+  linux-arm64:
+    name: Linux ARM64 Runtime Tests
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify host architecture
+        run: rustc -vV
+      - name: Run tests
+        run: cargo test -p sqlitegis --verbose --locked
+
+  # Cross link-check for aarch64 musl, the typical edge/container target
+  # (Alpine, distroless images). cargo-cross handles the sysroot so we do
+  # not have to pre-install musl-dev on the runner.
+  edge-musl-link-check:
+    name: Edge Cross Link Check (aarch64-unknown-linux-musl)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: Cross test build (no-run, musl)
+        run: |
+          cross test \
+            --target aarch64-unknown-linux-musl \
+            -p sqlitegis \
+            --features bundled-sqlite \
+            --no-run \
+            --locked
+
+  # ARMv7 link check using the host cross toolchain (avoids old glibc in
+  # cross images). Covers Raspberry Pi 2/3 32-bit and ARMv7 industrial
+  # boards.
+  armv7-link-check:
+    name: ARMv7 Link Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-gnueabihf
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ARMv7 cross-linker
+        run: |
+          # GitHub Ubuntu images sometimes ship an Azure CLI apt source that
+          # returns 403 and breaks apt-get update. Remove it defensively.
+          if [ -f /etc/apt/sources.list.d/azure-cli.list ]; then
+            sudo rm -f /etc/apt/sources.list.d/azure-cli.list
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-linux-gnueabihf \
+            libc6-dev-armhf-cross
+      - name: ARMv7 test build (no-run)
+        run: cargo test -p sqlitegis --features bundled-sqlite --target armv7-unknown-linux-gnueabihf --no-run --locked
+        env:
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          AR_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-ar
+          CFLAGS_armv7_unknown_linux_gnueabihf: --sysroot=/usr/arm-linux-gnueabihf
+
+  # Link check for Windows ARM64 (Surface Pro X, Copilot+ devices, Azure
+  # ARM64 VMs).
+  windows-arm64-link-check:
+    name: Windows ARM64 Link Check
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Test build (no-run)
+        run: cargo test -p sqlitegis --features bundled-sqlite --target aarch64-pc-windows-msvc --no-run --locked
 
   coverage:
     name: Coverage
@@ -214,7 +449,7 @@ jobs:
     timeout-minutes: 30
     needs: [fmt, clippy, test, test-postgres, wasm-test, wasm-test-diesel, docs]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov

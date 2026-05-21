@@ -2,11 +2,9 @@
 //! entirely in the browser via sqlite-wasm-rs.
 
 mod components;
-mod db;
-mod loader;
-mod runner;
 mod state;
 mod viz;
+mod worker_handle;
 
 use dioxus::prelude::*;
 use dioxus_free_icons::icons::fa_brands_icons::FaGithub;
@@ -14,9 +12,9 @@ use dioxus_free_icons::icons::fa_solid_icons::{
     FaBookOpen, FaCircleNotch, FaCube, FaHourglass, FaTriangleExclamation,
 };
 use dioxus_free_icons::Icon;
+use sqlitegis_web_demo_protocol::QueryOutcome;
 
 use crate::components::{QueryPanel, ResultsPanel, SchemaPanel};
-use crate::runner::QueryOutcome;
 use crate::viz::WorldMap;
 
 fn main() {
@@ -33,9 +31,10 @@ enum LoadStage {
     Error(String),
 }
 
-/// Stream the cities5000 dataset into the freshly-reset `places` table and
-/// pick a random row as the starting probe. Called on first mount and again
-/// after the Reset DB button reapplies the schema.
+/// Stream the cities5000 dataset into the freshly-reset `places` table
+/// (via the worker) and pick a random row as the starting probe. Called
+/// on first mount and again after the Reset DB button reapplies the
+/// schema.
 async fn populate_places(
     mut stage: Signal<LoadStage>,
     mut all_coords: Signal<Vec<(f64, f64)>>,
@@ -46,7 +45,7 @@ async fn populate_places(
         inserted: 0,
         total: 0,
     });
-    let loader_result = loader::load_places(|n, total, coords| {
+    let loader_result = worker_handle::load_dataset("/cities5000.tsv", |n, total, coords| {
         stage.set(LoadStage::LoadingData { inserted: n, total });
         // Append the newly inserted batch to the live coord set so the
         // canvas paints them on the next frame.
@@ -90,11 +89,11 @@ fn App() -> Element {
 
     use_effect(move || {
         spawn(async move {
-            if let Err(e) = db::reopen() {
-                stage.set(LoadStage::Error(format!("opening database: {e}")));
+            if let Err(e) = worker_handle::await_ready().await {
+                stage.set(LoadStage::Error(format!("starting worker: {e}")));
                 return;
             }
-            if let Err(e) = db::run_script(state::DEFAULT_SCHEMA_SQL) {
+            if let Err(e) = worker_handle::apply_schema(state::DEFAULT_SCHEMA_SQL).await {
                 stage.set(LoadStage::Error(format!("applying schema: {e}")));
                 return;
             }
@@ -195,7 +194,7 @@ fn App() -> Element {
                         class: "brand-postgis",
                         "PostGIS"
                     }
-                    "'s wire format, so queries port unmodified. Runs in your browser via "
+                    "'s wire format, so queries port unmodified. Built for two deployment shapes that desktop databases struggle with. Edge devices: mobile (iOS, Android), embedded ARM (Raspberry Pi, ARMv7 boards), aarch64 musl gateways, Windows ARM64. And the browser, via "
                     a {
                         href: "https://webassembly.org/",
                         rel: "noopener",
@@ -203,14 +202,14 @@ fn App() -> Element {
                         class: "brand-wasm",
                         "WebAssembly"
                     }
-                    ". Try it on the "
+                    ". Same crate, same Diesel bindings, on every host SQLite already runs on. Try the browser build below on the "
                     a {
                         href: "https://download.geonames.org/export/dump/",
                         rel: "noopener",
                         target: "_blank",
                         "cities5000"
                     }
-                    " dataset below."
+                    " dataset."
                 }
             }
             StatusBanner { stage: stage.read().clone() }
@@ -242,7 +241,7 @@ fn App() -> Element {
                         user_lat,
                         on_outcome: move |o: QueryOutcome| {
                             if let QueryOutcome::Rows { ref result, .. } = o {
-                                highlighted.set(runner::extract_lonlat(result));
+                                highlighted.set(worker_handle::extract_lonlat(result));
                             } else {
                                 highlighted.set(Vec::new());
                             }
@@ -250,26 +249,25 @@ fn App() -> Element {
                         },
                     }
                     SchemaPanel {
-                        on_reset: move |result: Result<(), String>| {
-                            match result {
-                                Ok(_) => {
-                                    outcome.set(None);
-                                    highlighted.set(Vec::new());
-                                    all_coords.set(Vec::new());
-                                    user_lon.set(f64::NAN);
-                                    user_lat.set(f64::NAN);
-                                    spawn(async move {
-                                        populate_places(
-                                            stage,
-                                            all_coords,
-                                            user_lon,
-                                            user_lat,
-                                        )
-                                        .await;
-                                    });
+                        on_reset: move |schema_sql: String| {
+                            outcome.set(None);
+                            highlighted.set(Vec::new());
+                            all_coords.set(Vec::new());
+                            user_lon.set(f64::NAN);
+                            user_lat.set(f64::NAN);
+                            spawn(async move {
+                                if let Err(e) = worker_handle::apply_schema(&schema_sql).await {
+                                    stage.set(LoadStage::Error(format!("applying schema: {e}")));
+                                    return;
                                 }
-                                Err(e) => outcome.set(Some(QueryOutcome::Error(e))),
-                            }
+                                populate_places(
+                                    stage,
+                                    all_coords,
+                                    user_lon,
+                                    user_lat,
+                                )
+                                .await;
+                            });
                         }
                     }
                     ResultsPanel { outcome: outcome.read().clone() }

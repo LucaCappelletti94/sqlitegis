@@ -3,15 +3,23 @@ name = "sqlitegis-web-demo"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Browser demo for SQLiteGIS: Diesel + sqlite-wasm-rs + a city-distance UI."
+description = "Browser demo for SQLiteGIS: Diesel + sqlite-wasm-rs (in a dedicated worker) + a city-distance UI."
 
 # Kept out of the main workspace on purpose. Dioxus drags in hundreds of
-# transitive crates that would slow down workspace precommit/audit.
+# transitive crates that would slow down workspace precommit/audit. The
+# `members` list pulls in the dedicated SQLite worker and the shared
+# message-protocol crate so a single `cargo check` covers both bundles.
 [workspace]
+members = ["worker", "protocol"]
 
 [[bin]]
 name = "sqlitegis-web-demo"
 path = "src/main.rs"
+
+[build-dependencies]
+# Used in build.rs to compile the worker crate to wasm32 and run
+# wasm-bindgen on the output before it lands in `public/generated/`.
+wasm-bindgen-cli-support = "0.2"
 
 [dependencies]
 dioxus = { version = "0.7", features = ["web"] }
@@ -25,15 +33,13 @@ dioxus-code-editor = "0.1"
 # the demo needs (run, table, map, status indicators); brands adds GitHub.
 dioxus-free-icons = { version = "0.10", features = ["font-awesome-solid", "font-awesome-brands"] }
 
-# SQLiteGIS via path so the demo always tracks the live source.
-sqlitegis = { path = "../../sqlitegis", features = ["diesel-sqlite"] }
+# Shared worker message protocol. Pure-data serde crate, no sqlite deps.
+sqlitegis-web-demo-protocol = { path = "protocol" }
 
-# WASM-side SQLite + Diesel SQLite backend.
-diesel = { version = "2", default-features = false, features = ["sqlite"] }
-sqlite-wasm-rs = "0.5"
-
-# Browser interop.
+# Browser interop. SQLite now lives in `worker/` so this bundle no longer
+# carries diesel / sqlite-wasm-rs / sqlitegis.
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Window",
@@ -43,9 +49,17 @@ web-sys = { version = "0.3", features = [
     "Element",
     "DomRect",
     "Performance",
+    "Worker",
+    "WorkerOptions",
+    "WorkerType",
+    "MessageEvent",
+    "ErrorEvent",
 ] }
-gloo-net = { version = "0.6", features = ["http"] }
-gloo-timers = { version = "0.3", features = ["futures"] }
+serde-wasm-bindgen = "0.6"
+# Channels used by worker_handle to await worker responses on the main
+# thread without re-entering Dioxus signals from the wrong context.
+futures = { version = "0.3", default-features = false, features = ["std"] }
+futures-channel = "0.3"
 
 # Logging.
 log = "0.4"

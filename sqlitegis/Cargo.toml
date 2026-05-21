@@ -44,6 +44,15 @@ diesel = ["dep:diesel"]
 diesel-sqlite = ["diesel", "sqlite", "diesel/sqlite"]
 diesel-postgres = ["diesel", "diesel/postgres"]
 
+# Compile SQLite from the C amalgamation that libsqlite3-sys ships, instead
+# of linking against a system SQLite. Off by default so distro builds keep
+# their dynamic libsqlite link, on for cross targets (iOS, Android, musl,
+# Windows ARM64) where a system SQLite is not reachable from the sysroot.
+# The `?` syntax only activates the libsqlite3-sys feature when the sqlite
+# feature is already enabled, so passing --features bundled-sqlite alone is
+# a no-op.
+bundled-sqlite = ["libsqlite3-sys?/bundled"]
+
 [dependencies]
 geo = { workspace = true }
 geozero = { version = "0.15", features = ["with-wkt", "with-geojson", "with-svg", "with-geo", "with-wkb"] }
