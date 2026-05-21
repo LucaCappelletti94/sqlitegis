@@ -129,7 +129,7 @@ required-features = ["diesel-sqlite"]
 resolver = "2"
 
 [workspace.package]
-rust-version = "1.86"
+rust-version = "1.88"
 
 [workspace.dependencies]
 geo = { version = "0.33", default-features = false }
