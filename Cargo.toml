@@ -133,7 +133,7 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 geo = { version = "0.33", default-features = false }
-libsqlite3-sys = { version = ">=0.17.2, <0.36.0" }
+libsqlite3-sys = { version = ">=0.17.2, <0.38.0" }
 
 [profile.release]
 opt-level = "z"
