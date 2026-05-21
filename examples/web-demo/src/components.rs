@@ -10,18 +10,19 @@ use dioxus_free_icons::icons::fa_solid_icons::{
 };
 use dioxus_free_icons::Icon;
 
-use crate::db;
-use crate::runner::{self, QueryOutcome};
+use sqlitegis_web_demo_protocol::QueryOutcome;
+
 use crate::state::DEFAULT_SCHEMA_SQL;
+use crate::worker_handle;
 
 fn sql_theme() -> CodeTheme {
     CodeTheme::fixed(Theme::GITHUB_LIGHT)
 }
 
 #[component]
-pub fn SchemaPanel(on_reset: EventHandler<Result<(), String>>) -> Element {
+pub fn SchemaPanel(on_reset: EventHandler<String>) -> Element {
     let mut sql = use_signal(|| DEFAULT_SCHEMA_SQL.to_string());
-    let mut status = use_signal(|| String::new());
+    let status = use_signal(String::new);
 
     rsx! {
         section { class: "schema-panel",
@@ -34,19 +35,10 @@ pub fn SchemaPanel(on_reset: EventHandler<Result<(), String>>) -> Element {
                     aria_label: "Reset database and reapply the schema",
                     title: "Reset database and reapply the schema",
                     onclick: move |_| {
-                        // Re-open the connection so DROP TABLE etc. start from
-                        // a clean slate, then apply the (possibly edited) schema.
-                        let s = sql.read().clone();
-                        let result = (|| -> Result<(), String> {
-                            db::reopen()?;
-                            db::run_script(&s)?;
-                            Ok(())
-                        })();
-                        match &result {
-                            Ok(_) => status.set("Schema applied. Table recreated.".to_string()),
-                            Err(e) => status.set(format!("Error: {e}")),
-                        }
-                        on_reset.call(result);
+                        // Emit the current (possibly edited) schema upstream;
+                        // main.rs will spawn the worker calls so DROP TABLE
+                        // and the cities5000 reload run off the main thread.
+                        on_reset.call(sql.read().clone());
                     },
                     Icon { width: 13, height: 13, icon: FaArrowsRotate, class: "btn-icon".to_string() }
                     "Reset DB"
@@ -73,12 +65,10 @@ pub fn SchemaPanel(on_reset: EventHandler<Result<(), String>>) -> Element {
 }
 
 const PRESET_KNN: &str = "\
--- Nearest cities by geodesic distance from the probe lon/lat.
--- R-tree-prefiltered with a generous 10-degree bbox; ORDER BY
--- refines the candidates by exact geodesic distance.
+-- Nearest cities by geodesic distance from the probe lon/lat. R-tree-prefiltered
+-- with a generous 10-degree bbox, ORDER BY refines candidates by exact distance.
 SELECT p.name, p.country, p.population,
-  ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326))/1000.0,
-        1) AS km,
+  ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) / 1000.0, 1) AS km,
   ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
 FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
 WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
@@ -86,26 +76,23 @@ WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
 ORDER BY km LIMIT 100;";
 
 const PRESET_RADIUS: &str = "\
--- Cities within 1000 km of your location. R-tree bbox prefilter
--- then geodesic refinement. dlon scales with 1/cos(lat) so the
--- bound stays safe at the poles where one degree of longitude
--- shrinks.
+-- Cities within 1000 km of your location. R-tree bbox prefilter then geodesic
+-- refinement. dlon scales with 1/cos(lat) so the bound stays safe at the poles
+-- where one degree of longitude shrinks.
 SELECT p.name, p.country, p.population,
   ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
-FROM places p
-JOIN places_geom_rtree r ON p.rowid = r.id
-WHERE r.xmax >= :lon - 1000000.0/(111320.0*cos(radians(:lat)))
-  AND r.xmin <= :lon + 1000000.0/(111320.0*cos(radians(:lat)))
-  AND r.ymax >= :lat - 1000000.0/111320.0
-  AND r.ymin <= :lat + 1000000.0/111320.0
-  AND ST_DWithinSphere(p.geom,
-                       ST_Point(:lon, :lat, 4326), 1000000.0)
+FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
+WHERE r.xmax >= :lon - 1000000.0 / (111320.0 * cos(radians(:lat)))
+  AND r.xmin <= :lon + 1000000.0 / (111320.0 * cos(radians(:lat)))
+  AND r.ymax >= :lat - 1000000.0 / 111320.0
+  AND r.ymin <= :lat + 1000000.0 / 111320.0
+  AND ST_DWithinSphere(p.geom, ST_Point(:lon, :lat, 4326), 1000000.0)
 ORDER BY p.population DESC;";
 
 const PRESET_ENVELOPE: &str = "\
--- Cities inside a 30x30 degree box centered on the probe.
--- For a point-only dataset the R-tree bbox check IS the
--- intersection test, so no ST_Intersects refinement is needed.
+-- Cities inside a 30x30 degree box centered on the probe. For a point-only
+-- dataset the R-tree bbox check IS the intersection test, so no ST_Intersects
+-- refinement is needed.
 SELECT p.name, p.country, p.population,
   ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
 FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
@@ -114,14 +101,12 @@ WHERE r.xmax >= :lon - 15.0 AND r.xmin <= :lon + 15.0
 ORDER BY p.population DESC LIMIT 100;";
 
 const PRESET_BEARING: &str = "\
--- Geodesic bearing from the probe to each of the 100 nearest cities.
--- ST_Azimuth returns radians (0 = north, clockwise); degrees() makes
--- the result a familiar 0..360 compass reading.
+-- Geodesic bearing from the probe to each of the 100 nearest cities. ST_Azimuth
+-- returns radians (0 = north, clockwise). degrees() converts to a familiar
+-- 0..360 compass reading.
 SELECT p.name, p.country,
-  ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326))/1000.0,
-        1) AS km,
-  ROUND(degrees(ST_Azimuth(ST_Point(:lon, :lat, 4326), p.geom)),
-        1) AS bearing_deg,
+  ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) / 1000.0, 1) AS km,
+  ROUND(degrees(ST_Azimuth(ST_Point(:lon, :lat, 4326), p.geom)), 1) AS bearing_deg,
   ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
 FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
 WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
@@ -129,17 +114,16 @@ WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
 ORDER BY km LIMIT 100;";
 
 const PRESET_COMPASS: &str = "\
--- Project the probe 5000 km in 8 cardinal and intercardinal
--- directions via ST_Project. Bearing is in radians (0 = north,
--- clockwise). The result is a destination Point per compass arm.
+-- Project the probe 5000 km in 8 cardinal and intercardinal directions via
+-- ST_Project. Bearing is in radians (0 = north, clockwise). The result is a
+-- destination Point per compass arm.
 WITH RECURSIVE compass(i) AS (
-  SELECT 0 UNION ALL SELECT i+1 FROM compass WHERE i < 7
+  SELECT 0 UNION ALL SELECT i + 1 FROM compass WHERE i < 7
 )
 SELECT
   CASE i
-    WHEN 0 THEN 'N'  WHEN 1 THEN 'NE' WHEN 2 THEN 'E'
-    WHEN 3 THEN 'SE' WHEN 4 THEN 'S'  WHEN 5 THEN 'SW'
-    WHEN 6 THEN 'W'  ELSE 'NW'
+    WHEN 0 THEN 'N'  WHEN 1 THEN 'NE' WHEN 2 THEN 'E'  WHEN 3 THEN 'SE'
+    WHEN 4 THEN 'S'  WHEN 5 THEN 'SW' WHEN 6 THEN 'W'  ELSE 'NW'
   END AS direction,
   ROUND(ST_X(ST_Project(ST_Point(:lon, :lat, 4326), 5000000.0,
                         radians(i * 45.0))), 4) AS lon,
@@ -148,10 +132,10 @@ SELECT
 FROM compass;";
 
 const PRESET_POLYLINE: &str = "\
--- Build a polyline between the two cities nearest the probe and
--- report its geodesic (km) and planar (degrees) length.
--- ST_MakeLine builds a 2-point LineString; ST_LengthSphere needs
--- SRID 4326 input, ST_Length is the CRS-units planar measure.
+-- Build a polyline between the two cities nearest the probe and report its
+-- geodesic (km) and planar (degrees) length. ST_MakeLine builds a 2-point
+-- LineString. ST_LengthSphere needs SRID 4326 input. ST_Length is the
+-- CRS-units planar measure.
 WITH nearest AS (
   SELECT p.name, p.geom,
     ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) AS d
@@ -159,34 +143,28 @@ WITH nearest AS (
   WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
     AND r.ymax >= :lat - 10 AND r.ymin <= :lat + 10
   ORDER BY d LIMIT 2
+),
+endpoints AS (
+  SELECT (SELECT geom FROM nearest LIMIT 1) AS a,
+         (SELECT geom FROM nearest LIMIT 1 OFFSET 1) AS b
 )
 SELECT
   name AS endpoint,
-  ROUND(d/1000.0, 1) AS km_from_probe,
-  ROUND(ST_LengthSphere(ST_MakeLine(
-    (SELECT geom FROM nearest LIMIT 1),
-    (SELECT geom FROM nearest LIMIT 1 OFFSET 1)
-  ))/1000.0, 1) AS segment_km,
-  ROUND(ST_Length(ST_MakeLine(
-    (SELECT geom FROM nearest LIMIT 1),
-    (SELECT geom FROM nearest LIMIT 1 OFFSET 1)
-  )), 3) AS segment_planar_deg,
+  ROUND(d / 1000.0, 1) AS km_from_probe,
+  ROUND(ST_LengthSphere(ST_MakeLine(a, b)) / 1000.0, 1) AS segment_km,
+  ROUND(ST_Length(ST_MakeLine(a, b)), 3) AS segment_planar_deg,
   ST_X(geom) AS lon, ST_Y(geom) AS lat
-FROM nearest;";
+FROM nearest CROSS JOIN endpoints;";
 
 const PRESET_SPHEROID: &str = "\
--- Compare ST_DistanceSphere (Haversine) and ST_DistanceSpheroid
--- (Karney) for the 50 nearest cities. The delta column shows the
--- ~0.5%-scale precision gap between the spherical and ellipsoidal
--- earth models. The gap grows with latitude.
+-- Compare ST_DistanceSphere (Haversine) and ST_DistanceSpheroid (Karney) for
+-- the 50 nearest cities. The delta column shows the ~0.5%-scale precision gap
+-- between spherical and ellipsoidal earth models. Gap grows with latitude.
 SELECT p.name, p.country,
-  ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)), 0)
-    AS m_sphere,
-  ROUND(ST_DistanceSpheroid(p.geom, ST_Point(:lon, :lat, 4326)), 0)
-    AS m_spheroid,
+  ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)), 0) AS m_sphere,
+  ROUND(ST_DistanceSpheroid(p.geom, ST_Point(:lon, :lat, 4326)), 0) AS m_spheroid,
   ROUND(ST_DistanceSpheroid(p.geom, ST_Point(:lon, :lat, 4326))
-        - ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)),
-        1) AS delta_m,
+        - ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)), 1) AS delta_m,
   ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
 FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
 WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
@@ -194,15 +172,14 @@ WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
 ORDER BY m_spheroid LIMIT 50;";
 
 const PRESET_ASTEXT: &str = "\
--- BLOB to WKT, for the 100 cities nearest the probe lon/lat.
--- R-tree-prefiltered with a 10-degree bbox; ORDER BY refines.
+-- BLOB to WKT for the 100 cities nearest the probe lon/lat. R-tree-prefiltered
+-- with a 10-degree bbox, ORDER BY refines.
 SELECT p.name, ST_AsText(p.geom) AS wkt,
   ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
 FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
 WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
   AND r.ymax >= :lat - 10 AND r.ymin <= :lat + 10
-ORDER BY ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326))
-LIMIT 100;";
+ORDER BY ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) LIMIT 100;";
 
 const PRESET_EXPLAIN: &str = "\
 -- Query plan for the indexed nearest-cities lookup. Look for
@@ -216,25 +193,23 @@ WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
 ORDER BY d LIMIT 100;";
 
 const PRESET_COUNTRIES: &str = "\
--- Top countries by city count within 3000 km of the probe.
--- R-tree bbox prefilter (dlon scales with 1/cos(lat)) then exact
--- ST_DWithinSphere for the 3000 km circle.
-SELECT p.country, COUNT(*) AS cities,
-  SUM(p.population) AS total_pop
+-- Top countries by city count within 3000 km of the probe. R-tree bbox
+-- prefilter (dlon scales with 1/cos(lat)) then exact ST_DWithinSphere for
+-- the 3000 km circle.
+SELECT p.country, COUNT(*) AS cities, SUM(p.population) AS total_pop
 FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
-WHERE r.xmax >= :lon - 3000000.0/(111320.0*cos(radians(:lat)))
-  AND r.xmin <= :lon + 3000000.0/(111320.0*cos(radians(:lat)))
-  AND r.ymax >= :lat - 3000000.0/111320.0
-  AND r.ymin <= :lat + 3000000.0/111320.0
-  AND ST_DWithinSphere(p.geom,
-                       ST_Point(:lon, :lat, 4326), 3000000.0)
+WHERE r.xmax >= :lon - 3000000.0 / (111320.0 * cos(radians(:lat)))
+  AND r.xmin <= :lon + 3000000.0 / (111320.0 * cos(radians(:lat)))
+  AND r.ymax >= :lat - 3000000.0 / 111320.0
+  AND r.ymin <= :lat + 3000000.0 / 111320.0
+  AND ST_DWithinSphere(p.geom, ST_Point(:lon, :lat, 4326), 3000000.0)
 GROUP BY p.country
 ORDER BY cities DESC LIMIT 100;";
 
 const PRESET_RINGS: &str = "\
--- Population in concentric rings around the probe (up to 3000 km).
--- R-tree prefilter inside the CTE; the CASE then bins the exact
--- geodesic distance into bands.
+-- Population in concentric rings around the probe (up to 3000 km). R-tree
+-- prefilter inside the CTE. The CASE then bins the exact geodesic distance
+-- into bands.
 SELECT
   CASE
     WHEN d <=  500000 THEN '0-500 km'
@@ -247,25 +222,23 @@ FROM (
   SELECT p.population,
     ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) AS d
   FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
-  WHERE r.xmax >= :lon - 3000000.0/(111320.0*cos(radians(:lat)))
-    AND r.xmin <= :lon + 3000000.0/(111320.0*cos(radians(:lat)))
-    AND r.ymax >= :lat - 3000000.0/111320.0
-    AND r.ymin <= :lat + 3000000.0/111320.0
-    AND ST_DWithinSphere(p.geom,
-                         ST_Point(:lon, :lat, 4326), 3000000.0)
+  WHERE r.xmax >= :lon - 3000000.0 / (111320.0 * cos(radians(:lat)))
+    AND r.xmin <= :lon + 3000000.0 / (111320.0 * cos(radians(:lat)))
+    AND r.ymax >= :lat - 3000000.0 / 111320.0
+    AND r.ymin <= :lat + 3000000.0 / 111320.0
+    AND ST_DWithinSphere(p.geom, ST_Point(:lon, :lat, 4326), 3000000.0)
 )
 GROUP BY ring ORDER BY MIN(d);";
 
 const PRESET_GEOJSON: &str = "\
--- Serialize the 100 cities nearest the probe to GeoJSON.
--- R-tree-prefiltered with a 10-degree bbox; ORDER BY refines.
+-- Serialize the 100 cities nearest the probe to GeoJSON. R-tree-prefiltered
+-- with a 10-degree bbox, ORDER BY refines.
 SELECT p.name, p.country, ST_AsGeoJSON(p.geom) AS geojson,
   ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
 FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
 WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
   AND r.ymax >= :lat - 10 AND r.ymin <= :lat + 10
-ORDER BY ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326))
-LIMIT 100;";
+ORDER BY ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) LIMIT 100;";
 
 #[component]
 pub fn QueryPanel(
@@ -288,7 +261,11 @@ pub fn QueryPanel(
             return;
         }
         let current = sql.peek().clone();
-        on_outcome.call(runner::run(&current, lon, lat));
+        let outcome_handler = on_outcome;
+        spawn(async move {
+            let outcome = worker_handle::run_query(&current, lon, lat).await;
+            outcome_handler.call(outcome);
+        });
     });
 
     rsx! {
@@ -298,161 +275,167 @@ pub fn QueryPanel(
                     Icon { width: 16, height: 16, icon: FaCode, class: "section-icon".to_string() }
                     "Query"
                 }
+                div { class: "presets",
+                    PresetChip {
+                        label: "KNN",
+                        description: "Find the 100 cities closest to the probe point, R-tree prefiltered and ranked by geodesic distance on the WGS84 ellipsoid",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaBullseye, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "KNN",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_KNN.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("KNN".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "Radius",
+                        description: "List every city within 1000 km of the probe point. R-tree prefiltered so the engine touches O(log N) candidates instead of every row",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaCompass, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "Radius",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_RADIUS.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("Radius".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "BBOX",
+                        description: "List cities inside a 30 by 30 degree box centered on the probe point, top 100 by population",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaVectorSquare, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "BBOX",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_ENVELOPE.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("BBOX".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "Bearing",
+                        description: "Geodesic compass bearing from the probe to each of the 100 nearest cities, R-tree prefiltered. ST_Azimuth converts radians to a 0..360 reading",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaLocationArrow, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "Bearing",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_BEARING.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("Bearing".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "Compass",
+                        description: "Project the probe 5000 km in 8 cardinal and intercardinal directions via ST_Project. Returns the destination Point per compass arm",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaArrowsToCircle, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "Compass",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_COMPASS.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("Compass".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "Polyline",
+                        description: "Build a polyline between the two cities nearest the probe and report its geodesic and planar length via ST_MakeLine + ST_LengthSphere + ST_Length",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaRoute, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "Polyline",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_POLYLINE.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("Polyline".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "Spheroid",
+                        description: "Compare ST_DistanceSphere (Haversine) and ST_DistanceSpheroid (Karney) for the 50 nearest cities. The delta column surfaces the precision gap between spherical and ellipsoidal earth models",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaScaleBalanced, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "Spheroid",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_SPHEROID.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("Spheroid".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "AsText",
+                        description: "Convert the EWKB BLOB geometry column to readable WKT for the 100 cities nearest the probe",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaFont, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "AsText",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_ASTEXT.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("AsText".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "Explain",
+                        description: "Show the query plan SQLite picks for an R-tree-backed lookup, useful to confirm the virtual table is in use",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaMagnifyingGlass, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "Explain",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_EXPLAIN.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("Explain".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "Countries",
+                        description: "Group cities within 3000 km of the probe by country and rank by city count and total population",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaFlag, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "Countries",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_COUNTRIES.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("Countries".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "Rings",
+                        description: "Aggregate city counts and total population into concentric distance bands around the probe",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaCircleDot, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "Rings",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_RINGS.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("Rings".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "GeoJSON",
+                        description: "Serialize the 100 cities nearest the probe as GeoJSON Point features",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaFileCode, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "GeoJSON",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_GEOJSON.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("GeoJSON".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                }
                 button {
                     aria_label: "Run the query against the loaded database",
                     title: "Run the query against the loaded database",
                     onclick: move |_| {
-                        let outcome = runner::run(&sql.read(), *user_lon.read(), *user_lat.read());
-                        on_outcome.call(outcome);
+                        let current = sql.read().clone();
+                        let lon = *user_lon.read();
+                        let lat = *user_lat.read();
+                        let outcome_handler = on_outcome;
+                        spawn(async move {
+                            let outcome = worker_handle::run_query(&current, lon, lat).await;
+                            outcome_handler.call(outcome);
+                        });
                     },
                     Icon { width: 13, height: 13, icon: FaPlay, class: "btn-icon".to_string() }
                     "Run"
-                }
-            }
-            div { class: "presets",
-                PresetChip {
-                    label: "KNN",
-                    description: "Find the 100 cities closest to the probe point, R-tree prefiltered and ranked by geodesic distance on the WGS84 ellipsoid",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaBullseye, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "KNN",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_KNN.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("KNN".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "Radius",
-                    description: "List every city within 1000 km of the probe point. R-tree prefiltered so the engine touches O(log N) candidates instead of every row",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaCompass, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "Radius",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_RADIUS.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("Radius".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "BBOX",
-                    description: "List cities inside a 30 by 30 degree box centered on the probe point, top 100 by population",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaVectorSquare, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "BBOX",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_ENVELOPE.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("BBOX".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "Bearing",
-                    description: "Geodesic compass bearing from the probe to each of the 100 nearest cities, R-tree prefiltered. ST_Azimuth converts radians to a 0..360 reading",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaLocationArrow, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "Bearing",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_BEARING.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("Bearing".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "Compass",
-                    description: "Project the probe 5000 km in 8 cardinal and intercardinal directions via ST_Project. Returns the destination Point per compass arm",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaArrowsToCircle, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "Compass",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_COMPASS.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("Compass".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "Polyline",
-                    description: "Build a polyline between the two cities nearest the probe and report its geodesic and planar length via ST_MakeLine + ST_LengthSphere + ST_Length",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaRoute, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "Polyline",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_POLYLINE.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("Polyline".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "Spheroid",
-                    description: "Compare ST_DistanceSphere (Haversine) and ST_DistanceSpheroid (Karney) for the 50 nearest cities. The delta column surfaces the precision gap between spherical and ellipsoidal earth models",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaScaleBalanced, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "Spheroid",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_SPHEROID.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("Spheroid".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "AsText",
-                    description: "Convert the EWKB BLOB geometry column to readable WKT for the 100 cities nearest the probe",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaFont, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "AsText",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_ASTEXT.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("AsText".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "Explain",
-                    description: "Show the query plan SQLite picks for an R-tree-backed lookup, useful to confirm the virtual table is in use",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaMagnifyingGlass, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "Explain",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_EXPLAIN.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("Explain".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "Countries",
-                    description: "Group cities within 3000 km of the probe by country and rank by city count and total population",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaFlag, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "Countries",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_COUNTRIES.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("Countries".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "Rings",
-                    description: "Aggregate city counts and total population into concentric distance bands around the probe",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaCircleDot, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "Rings",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_RINGS.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("Rings".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
-                }
-                PresetChip {
-                    label: "GeoJSON",
-                    description: "Serialize the 100 cities nearest the probe as GeoJSON Point features",
-                    icon: rsx! { Icon { width: 11, height: 11, icon: FaFileCode, class: "btn-icon".to_string() } },
-                    active: active_preset.read().as_str() == "GeoJSON",
-                    on_pick: move |_| {
-                        let new_sql = PRESET_GEOJSON.to_string();
-                        sql.set(new_sql.clone());
-                        active_preset.set("GeoJSON".to_string());
-                        on_outcome.call(runner::run(&new_sql, *user_lon.read(), *user_lat.read()));
-                    },
                 }
             }
             CodeEditor {

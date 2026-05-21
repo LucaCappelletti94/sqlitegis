@@ -1,0 +1,4 @@
+# Worker assets emitted by build.rs (wasm32 binary + wasm-bindgen JS shim
+# + boot loader). Regenerated on every cargo build, so there's no reason to
+# track them and the ~10 MB wasm bloats history.
+public/generated/

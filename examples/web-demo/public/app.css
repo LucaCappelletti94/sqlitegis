@@ -54,7 +54,7 @@ main {
    pinned to the right of the same row. */
 .panel-header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
     margin-bottom: 12px;
@@ -62,18 +62,23 @@ main {
 
 .panel-header h2 {
     margin: 0;
+    flex-shrink: 0;
 }
 
-/* Preset chips sit on their own row below the panel header, so the Run
-   button stays inline with the `Query` h2 (mirroring Schema / Reset DB).
-   Horizontal padding matches the header inset since the parent section
-   is full-bleed for the editor. */
+/* The preset-chip strip sits between the Query h2 and the Run button.
+   `flex: 1` lets it expand to absorb the gap. `justify-content:
+   flex-start` packs the chips immediately to the right of the h2.
+   `align-items: flex-start` anchors the chips to the top of the
+   header band so multi-row wrapping stays high rather than drifting
+   down toward the editor. */
 .presets {
     display: flex;
-    align-items: center;
-    gap: 4px;
     flex-wrap: wrap;
-    padding: 0 16px 12px;
+    justify-content: flex-start;
+    align-items: flex-start;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
 }
 
 /* Preset chips: secondary, muted-green buttons so they read as
@@ -85,9 +90,10 @@ main {
     color: var(--accent);
     border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 2px 7px;
+    padding: 1px 5px;
     font-size: 12px;
     font-weight: 500;
+    line-height: 1.35;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -97,17 +103,17 @@ main {
 }
 
 .preset-chip:hover {
-    filter: brightness(1.3);
-}
-
-.preset-chip.active {
-    background: var(--accent);
-    color: #FFFFFF;
     border-color: var(--accent);
 }
 
-.preset-chip.active:hover {
-    filter: none;
+/* The active chip stays on the same soft fill as idle, but its label
+   bolds and its border lights to the accent colour. No box-shadow or
+   underline indicator: the bold weight + accent border carries the
+   "currently loaded" signal without competing visually with the solid
+   accent Run / Reset DB buttons. */
+.preset-chip.active {
+    border-color: var(--accent);
+    font-weight: 600;
 }
 
 /* The Schema and Query panels drop side and bottom padding so the editor
@@ -177,6 +183,7 @@ main {
 
 header h1 {
     margin: 0 0 4px;
+    color: var(--accent);
     font-size: 28px;
     letter-spacing: -0.5px;
 }
@@ -192,11 +199,14 @@ header h1 {
     margin: 0 0 12px;
 }
 
-/* Tagline: the elevator pitch sentence under the title. Sits tight to the
-   h1 baseline and uses the accent colour to anchor the brand reading. */
+/* Tagline: the elevator pitch sentence under the title. Sits tight to
+   the h1 baseline. The h1 itself wears the bright SQLite-blue accent;
+   the tagline drops to a darker shade of the same family so the visual
+   hierarchy reads h1 (brightest) -> tagline (darker) -> intro (muted
+   slate). */
 header .tagline {
     margin: 0;
-    color: var(--accent);
+    color: #034E75;
     font-size: 16px;
     font-weight: 500;
     letter-spacing: 0.1px;
@@ -250,9 +260,11 @@ header .intro a.brand-rust { color: #B7410E; }
 header .intro a.brand-diesel { color: #A82F47; }
 header .intro a.brand-wasm { color: #654FF0; }
 
-/* GitHub / docs.rs / crates.io as small icon-and-label badges sitting
-   next to the tagline. Soft accent background, accent text and icon,
-   brighter on hover. */
+/* GitHub / docs.rs / crates.io as rounded pill badges next to the
+   tagline. Same accent palette as preset chips, but distinct shape:
+   fully rounded (border-radius 999px) versus the chips' 4px radius,
+   and chunkier padding so the eye reads them as a navigation cluster
+   rather than another row of selectable chips. */
 .quick-links {
     display: flex;
     align-items: center;
@@ -273,12 +285,12 @@ header .intro a.brand-wasm { color: #654FF0; }
     font-weight: 500;
     text-decoration: none;
     white-space: nowrap;
-    transition: filter 120ms ease-out;
+    transition: border-color 120ms ease-out;
 }
 
 .quick-links a:hover,
 .quick-links a:focus {
-    filter: brightness(1.25);
+    border-color: var(--accent);
     outline: none;
 }
 
@@ -350,6 +362,8 @@ textarea:not(.dxc-editor-input):focus {
    highlight/input layers. Drop the top so the first line sits flush
    against the panel header. */
 .dxc-editor.editor {
+    --dxc-editor-font-size: 13px;
+    --dxc-editor-line-height: 20px;
     --dxc-editor-padding: 0 18px 14px 0;
     --dxc-editor-gutter-padding: 0 0 14px 0;
 }
@@ -388,7 +402,7 @@ table.results {
     width: 100%;
     border-collapse: collapse;
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: 12px;
 }
 
 table.results th, table.results td {
@@ -404,7 +418,7 @@ table.results tbody tr:last-child td {
 }
 
 table.results th {
-    color: var(--fg-muted);
+    color: var(--accent);
     font-weight: 600;
 }
 

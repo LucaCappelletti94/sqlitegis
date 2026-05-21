@@ -1,0 +1,13 @@
+[package]
+name = "sqlitegis-web-demo-protocol"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Shared message types between the SQLiteGIS web demo UI and its dedicated SQLite worker."
+
+[lib]
+name = "sqlitegis_web_demo_protocol"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

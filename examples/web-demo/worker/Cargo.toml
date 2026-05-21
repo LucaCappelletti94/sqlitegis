@@ -1,0 +1,35 @@
+[package]
+name = "sqlitegis-web-demo-worker"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Dedicated SQLite worker for the SQLiteGIS web demo. Owns the in-memory connection, the cities5000 ingestion, and the query runner."
+
+[lib]
+name = "sqlitegis_web_demo_worker"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+sqlitegis = { path = "../../../sqlitegis", features = ["diesel-sqlite"] }
+diesel = { version = "2", default-features = false, features = ["sqlite"] }
+sqlite-wasm-rs = "0.5"
+
+sqlitegis-web-demo-protocol = { path = "../protocol" }
+
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "DedicatedWorkerGlobalScope",
+    "MessageEvent",
+    "Response",
+    "Performance",
+] }
+gloo-net = { version = "0.6", features = ["http"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+
+serde-wasm-bindgen = "0.6"
+log = "0.4"
+console_log = { version = "1", features = ["color"] }
+console_error_panic_hook = "0.1"
