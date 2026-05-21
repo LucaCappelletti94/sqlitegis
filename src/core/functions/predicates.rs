@@ -23,6 +23,10 @@ use crate::core::ewkb::parse_ewkb_pair;
 /// let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
 /// let b = geom_from_text("POINT(1 1)", None).unwrap();
 /// assert!(st_intersects(&a, &b).unwrap());
+///
+/// // Disjoint pair: the polygon and the far point share no points.
+/// let far = geom_from_text("POINT(100 100)", None).unwrap();
+/// assert!(!st_intersects(&a, &far).unwrap());
 /// ```
 pub fn st_intersects(a: &[u8], b: &[u8]) -> Result<bool> {
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
@@ -40,6 +44,9 @@ pub fn st_intersects(a: &[u8], b: &[u8]) -> Result<bool> {
 /// let poly = geom_from_text("POLYGON((0 0,4 0,4 4,0 4,0 0))", None).unwrap();
 /// let pt = geom_from_text("POINT(2 2)", None).unwrap();
 /// assert!(st_contains(&poly, &pt).unwrap());
+///
+/// let outside = geom_from_text("POINT(100 100)", None).unwrap();
+/// assert!(!st_contains(&poly, &outside).unwrap());
 /// ```
 pub fn st_contains(a: &[u8], b: &[u8]) -> Result<bool> {
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
@@ -57,6 +64,9 @@ pub fn st_contains(a: &[u8], b: &[u8]) -> Result<bool> {
 /// let pt = geom_from_text("POINT(2 2)", None).unwrap();
 /// let poly = geom_from_text("POLYGON((0 0,4 0,4 4,0 4,0 0))", None).unwrap();
 /// assert!(st_within(&pt, &poly).unwrap());
+///
+/// let outside = geom_from_text("POINT(100 100)", None).unwrap();
+/// assert!(!st_within(&outside, &poly).unwrap());
 /// ```
 pub fn st_within(a: &[u8], b: &[u8]) -> Result<bool> {
     st_contains(b, a)
@@ -73,6 +83,10 @@ pub fn st_within(a: &[u8], b: &[u8]) -> Result<bool> {
 /// let a = geom_from_text("POINT(0 0)", None).unwrap();
 /// let b = geom_from_text("POINT(10 10)", None).unwrap();
 /// assert!(st_disjoint(&a, &b).unwrap());
+///
+/// // Identical points are NOT disjoint.
+/// let c = geom_from_text("POINT(0 0)", None).unwrap();
+/// assert!(!st_disjoint(&a, &c).unwrap());
 /// ```
 pub fn st_disjoint(a: &[u8], b: &[u8]) -> Result<bool> {
     Ok(!st_intersects(a, b)?)
@@ -175,6 +189,9 @@ pub fn st_dwithin_spheroid(a: &[u8], b: &[u8], distance: f64) -> Result<bool> {
 /// let poly = geom_from_text("POLYGON((0 0,4 0,4 4,0 4,0 0))", None).unwrap();
 /// let pt = geom_from_text("POINT(2 2)", None).unwrap();
 /// assert!(st_covers(&poly, &pt).unwrap());
+///
+/// let outside = geom_from_text("POINT(100 100)", None).unwrap();
+/// assert!(!st_covers(&poly, &outside).unwrap());
 /// ```
 pub fn st_covers(a: &[u8], b: &[u8]) -> Result<bool> {
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
@@ -192,6 +209,9 @@ pub fn st_covers(a: &[u8], b: &[u8]) -> Result<bool> {
 /// let pt = geom_from_text("POINT(2 2)", None).unwrap();
 /// let poly = geom_from_text("POLYGON((0 0,4 0,4 4,0 4,0 0))", None).unwrap();
 /// assert!(st_covered_by(&pt, &poly).unwrap());
+///
+/// let outside = geom_from_text("POINT(100 100)", None).unwrap();
+/// assert!(!st_covered_by(&outside, &poly).unwrap());
 /// ```
 pub fn st_covered_by(a: &[u8], b: &[u8]) -> Result<bool> {
     st_covers(b, a)
@@ -208,6 +228,10 @@ pub fn st_covered_by(a: &[u8], b: &[u8]) -> Result<bool> {
 /// let a = geom_from_text("LINESTRING(0 0,1 1)", None).unwrap();
 /// let b = geom_from_text("LINESTRING(1 1,0 0)", None).unwrap();
 /// assert!(st_equals(&a, &b).unwrap());
+///
+/// // Different endpoint, different point set.
+/// let c = geom_from_text("LINESTRING(0 0,2 2)", None).unwrap();
+/// assert!(!st_equals(&a, &c).unwrap());
 /// ```
 pub fn st_equals(a: &[u8], b: &[u8]) -> Result<bool> {
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
@@ -225,6 +249,10 @@ pub fn st_equals(a: &[u8], b: &[u8]) -> Result<bool> {
 /// let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
 /// let b = geom_from_text("POLYGON((1 0,2 0,2 1,1 1,1 0))", None).unwrap();
 /// assert!(st_touches(&a, &b).unwrap());
+///
+/// // A disjoint polygon does not touch (no shared boundary).
+/// let far = geom_from_text("POLYGON((3 0,4 0,4 1,3 1,3 0))", None).unwrap();
+/// assert!(!st_touches(&a, &far).unwrap());
 /// ```
 pub fn st_touches(a: &[u8], b: &[u8]) -> Result<bool> {
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
@@ -243,6 +271,10 @@ pub fn st_touches(a: &[u8], b: &[u8]) -> Result<bool> {
 /// let line = geom_from_text("LINESTRING(-1 0,1 0)", None).unwrap();
 /// let poly = geom_from_text("POLYGON((0 -1,1 -1,1 1,0 1,0 -1))", None).unwrap();
 /// assert!(st_crosses(&line, &poly).unwrap());
+///
+/// // A line entirely outside the polygon does not cross it.
+/// let away = geom_from_text("LINESTRING(5 0,6 0)", None).unwrap();
+/// assert!(!st_crosses(&away, &poly).unwrap());
 /// ```
 pub fn st_crosses(a: &[u8], b: &[u8]) -> Result<bool> {
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
@@ -260,6 +292,10 @@ pub fn st_crosses(a: &[u8], b: &[u8]) -> Result<bool> {
 /// let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
 /// let b = geom_from_text("POLYGON((1 1,3 1,3 3,1 3,1 1))", None).unwrap();
 /// assert!(st_overlaps(&a, &b).unwrap());
+///
+/// // Disjoint polygons do not overlap.
+/// let far = geom_from_text("POLYGON((10 10,12 10,12 12,10 12,10 10))", None).unwrap();
+/// assert!(!st_overlaps(&a, &far).unwrap());
 /// ```
 pub fn st_overlaps(a: &[u8], b: &[u8]) -> Result<bool> {
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
