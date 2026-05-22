@@ -1923,27 +1923,13 @@ unsafe extern "C" fn sqlitegis_auto_extension_init(
     register_functions(db)
 }
 
-// C entry point for loadable extension (native only)
-//
-// Gated on feature = "sqlite-extension" so consumers that enable only the
-// in-process `sqlite` feature do not silently re-export `sqlite3_sqlitegis_init`
-// from their own binaries. That would collide with anyone else embedding
-// the SQLiteGIS extension at the C ABI level.
-
-/// `sqlite3_sqlitegis_init` is the entry point called by SQLite when loading
-/// this library as a loadable extension (`SELECT load_extension('libsqlitegis')`).
-#[cfg(all(feature = "sqlite-extension", not(target_arch = "wasm32")))]
-#[no_mangle]
-pub unsafe extern "C" fn sqlite3_sqlitegis_init(
-    db: *mut sqlite3,
-    _pz_err_msg: *mut *mut std::ffi::c_char,
-    _p_api: *mut sqlite3_api_routines,
-) -> c_int {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| register_functions(db))) {
-        Ok(rc) => rc,
-        Err(_) => SQLITE_ERROR,
-    }
-}
+// C entry point for loadable extension lives in src/sqlite/loadable.rs, not
+// here. Routing the C entry through this file is unsafe because every
+// SQLite call would go to the cdylib's link-time libsqlite3 instead of the
+// host's, segfaulting on any host with a different libsqlite3 (Anaconda
+// Python, the official Python.org installer, etc.). The
+// `sqlite-extension` feature in Cargo.toml pulls in `sqlite-loadable`
+// instead, which routes through the host's `sqlite3_api_routines` table.
 
 #[cfg(test)]
 mod tests {

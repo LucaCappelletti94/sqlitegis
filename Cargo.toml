@@ -34,10 +34,17 @@ default = ["diesel-sqlite"]
 sqlite = ["dep:libsqlite3-sys", "dep:sqlite-wasm-rs"]
 
 # Adds the `#[no_mangle]` C entry point `sqlite3_sqlitegis_init` so the
-# cdylib build is loadable via SQLite's `load_extension`. Keep this OFF
-# when consuming as a regular Rust dependency to avoid leaking the symbol
-# out of dependent binaries.
-sqlite-extension = ["sqlite"]
+# cdylib build is loadable via SQLite's `load_extension`. Routes every
+# SQLite call through the host's `sqlite3_api_routines` table (via the
+# `sqlite-loadable` crate), so the produced cdylib has no link-time
+# dependency on a specific libsqlite3 and works against whichever
+# libsqlite3 the host (Python, the SQLite CLI, etc.) has loaded.
+#
+# Independent from `sqlite`: enabling `sqlite-extension` alone produces a
+# portable cdylib without pulling in the direct-libsqlite3-sys call path.
+# Enable both when the same binary needs to do in-process registration
+# (via `register_functions`) AND export the C entry point.
+sqlite-extension = ["dep:sqlite-loadable"]
 
 # Backend-agnostic Diesel types and expression methods. Enable
 # `diesel-sqlite` or `diesel-postgres` to get backend-specific impls.
@@ -57,6 +64,10 @@ bundled-sqlite = ["libsqlite3-sys?/bundled"]
 [dependencies]
 geo = { workspace = true }
 geozero = { version = "0.15", features = ["with-wkt", "with-geojson", "with-svg", "with-geo", "with-wkb"] }
+# Loadable-extension entry point and `sqlite3_api_routines`-routed bindings.
+# Gated on the `sqlite-extension` feature so it is only pulled in when the
+# user actually wants to build the cdylib for `load_extension`.
+sqlite-loadable = { version = "0.0.6-alpha.6", optional = true }
 thiserror = "2"
 serde_json = "1"
 diesel = { version = "2", default-features = false, optional = true }
@@ -88,7 +99,7 @@ required-features = ["sqlite"]
 [[test]]
 name = "sqlite_wasm"
 path = "tests/sqlite_wasm.rs"
-required-features = ["sqlite"]
+required-features = ["sqlite", "sqlite-extension"]
 
 [[test]]
 name = "diesel_sqlite_types"

@@ -41,12 +41,10 @@ hooks = [
       types = ["rust"],
       pass_filenames = false },
 
-    { id = "cargo-test-sqlite-extension",
-      name = "cargo test (sqlite-extension symbol)",
-      entry = "cargo test -p sqlitegis --features sqlite-extension --test sqlite_integration",
-      language = "system",
-      types = ["rust"],
-      pass_filenames = false },
+    # The sqlite-extension cdylib is built and smoke-tested by the
+    # Python wheel CI; we no longer run a parallel Rust-side load test
+    # because sqlite-loadable's bundled SQLite (via sqlite3ext-sys)
+    # would collide with libsqlite3-sys in the same test binary.
 
     { id = "cargo-test-doc",
       name = "cargo test --doc (workspace)",

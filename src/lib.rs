@@ -26,7 +26,10 @@ pub mod core;
 #[doc(inline)]
 pub use core::error::{Result, SqliteGisError};
 
-#[cfg(feature = "sqlite")]
+// `sqlite` enables the in-process registration API; `sqlite-extension`
+// enables the cdylib loadable-extension entry point. The submodule has
+// its own per-feature `mod` declarations for ffi.rs and loadable.rs.
+#[cfg(any(feature = "sqlite", feature = "sqlite-extension"))]
 pub mod sqlite;
 
 #[cfg(feature = "diesel")]
