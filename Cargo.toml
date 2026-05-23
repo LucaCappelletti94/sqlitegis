@@ -61,6 +61,11 @@ diesel-postgres = ["diesel", "diesel/postgres"]
 # a no-op.
 bundled-sqlite = ["libsqlite3-sys?/bundled"]
 
+# Opt-in flag for the SpatiaLite comparison benchmark. Off by default so
+# the CI matrix does not need SpatiaLite installed. See the [[bench]]
+# entry at the bottom of this file for run instructions.
+bench-spatialite = []
+
 [dependencies]
 geo = { workspace = true }
 geozero = { version = "0.15", features = ["with-wkt", "with-geojson", "with-svg", "with-geo", "with-wkb"] }
@@ -131,6 +136,19 @@ name = "spatial_index"
 path = "benches/spatial_index.rs"
 harness = false
 required-features = ["diesel-sqlite"]
+
+# Comparison benchmark vs SpatiaLite. Requires:
+#   1. `libsqlite3-mod-spatialite` installed system-wide (apt / brew /
+#      conda-forge) so SQLite can `load_extension('mod_spatialite')`.
+#   2. The sqlitegis cdylib already built at `target/release/libsqlitegis.so`
+#      via `cargo build --release --features sqlite-extension,bundled-sqlite`.
+# Run with:
+#   cargo bench --features bench-spatialite spatialite_vs_sqlitegis
+[[bench]]
+name = "spatialite_vs_sqlitegis"
+path = "benches/spatialite_vs_sqlitegis.rs"
+harness = false
+required-features = ["bench-spatialite"]
 
 # Single-package workspace. The package above is the only member;
 # workspace.package and workspace.dependencies stay here so future
