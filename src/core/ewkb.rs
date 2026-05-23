@@ -10,7 +10,7 @@
 //!   \[i32\]: SRID (only when SRID flag set, in declared byte order)
 //!   \[rest\]: ISO WKB geometry payload
 
-use geo::{Geometry, Point};
+use geo::{Coord, Geometry, Point, Rect};
 use geozero::wkb::Ewkb;
 use geozero::{CoordDimensions, ToGeo, ToWkb};
 
@@ -314,6 +314,200 @@ pub fn parse_ewkb_pair(a: &[u8], b: &[u8]) -> Result<(Geometry<f64>, Geometry<f6
     let (gb, srid_b) = parse_ewkb(b)?;
     let srid = ensure_matching_srid(srid_a, srid_b)?;
     Ok((ga, gb, srid))
+}
+
+/// Compute the planar minimum bounding rectangle of an EWKB blob without
+/// allocating a [`Geometry`] enum.
+///
+/// Walks the EWKB byte payload, reads only the X/Y coordinates, and tracks
+/// running min/max. For the "many points vs one window" filter shape this
+/// is roughly 10-100x cheaper per call than `parse_ewkb(...).bounding_rect()`
+/// because it skips the heap-allocating decode entirely.
+///
+/// Returns `Ok(None)` when the geometry is empty (empty Point with NaN
+/// coordinates, empty LineString, empty Polygon, or any container whose
+/// elements are all empty). Returns `Err` only for malformed blobs.
+///
+/// # Example
+///
+/// ```
+/// use sqlitegis::core::ewkb::extract_mbr;
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let blob = geom_from_text("POLYGON((0 0, 10 0, 10 5, 0 5, 0 0))", None).unwrap();
+/// let mbr = extract_mbr(&blob).unwrap().unwrap();
+/// assert_eq!(mbr.min().x, 0.0);
+/// assert_eq!(mbr.min().y, 0.0);
+/// assert_eq!(mbr.max().x, 10.0);
+/// assert_eq!(mbr.max().y, 5.0);
+///
+/// let empty = geom_from_text("POINT EMPTY", None).unwrap();
+/// assert!(extract_mbr(&empty).unwrap().is_none());
+/// ```
+pub fn extract_mbr(blob: &[u8]) -> Result<Option<Rect<f64>>> {
+    let header = parse_ewkb_header(blob)?;
+    let mut acc: BboxAcc = None;
+    walk_for_mbr(
+        blob,
+        header.data_offset,
+        header.geom_type,
+        header.has_z,
+        header.has_m,
+        header.little_endian,
+        &mut acc,
+    )?;
+    Ok(acc
+        .map(|(mnx, mny, mxx, mxy)| Rect::new(Coord { x: mnx, y: mny }, Coord { x: mxx, y: mxy })))
+}
+
+/// Running (min_x, min_y, max_x, max_y) accumulator. `None` means no
+/// finite coordinates have been seen yet.
+type BboxAcc = Option<(f64, f64, f64, f64)>;
+
+fn update_bbox(acc: &mut BboxAcc, x: f64, y: f64) {
+    // Skip NaN coordinates (PostGIS-style empty Points).
+    if x.is_nan() || y.is_nan() {
+        return;
+    }
+    match acc {
+        Some((mnx, mny, mxx, mxy)) => {
+            if x < *mnx {
+                *mnx = x;
+            }
+            if y < *mny {
+                *mny = y;
+            }
+            if x > *mxx {
+                *mxx = x;
+            }
+            if y > *mxy {
+                *mxy = y;
+            }
+        }
+        None => *acc = Some((x, y, x, y)),
+    }
+}
+
+fn read_f64_at(blob: &[u8], offset: usize, little_endian: bool) -> Result<f64> {
+    if blob.len() < offset + 8 {
+        return Err(SqliteGisError::InvalidEwkb(format!(
+            "blob truncated reading f64 at offset {offset}"
+        )));
+    }
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&blob[offset..offset + 8]);
+    Ok(read_f64(bytes, little_endian))
+}
+
+fn read_u32_at(blob: &[u8], offset: usize, little_endian: bool) -> Result<u32> {
+    if blob.len() < offset + 4 {
+        return Err(SqliteGisError::InvalidEwkb(format!(
+            "blob truncated reading u32 at offset {offset}"
+        )));
+    }
+    let bytes = [
+        blob[offset],
+        blob[offset + 1],
+        blob[offset + 2],
+        blob[offset + 3],
+    ];
+    Ok(if little_endian {
+        u32::from_le_bytes(bytes)
+    } else {
+        u32::from_be_bytes(bytes)
+    })
+}
+
+/// Walk the WKB payload at `offset` for a geometry of the given type +
+/// dimensions, updating `acc` with each (X, Y) it sees. Returns the offset
+/// just past this geometry's payload (so container types can chain).
+fn walk_for_mbr(
+    blob: &[u8],
+    mut offset: usize,
+    geom_type: u32,
+    has_z: bool,
+    has_m: bool,
+    little_endian: bool,
+    acc: &mut BboxAcc,
+) -> Result<usize> {
+    let coord_size = 16 + 8 * usize::from(has_z) + 8 * usize::from(has_m);
+
+    match geom_type {
+        WKB_POINT => {
+            let x = read_f64_at(blob, offset, little_endian)?;
+            let y = read_f64_at(blob, offset + 8, little_endian)?;
+            update_bbox(acc, x, y);
+            offset += coord_size;
+        }
+        WKB_LINESTRING => {
+            let npoints = read_u32_at(blob, offset, little_endian)? as usize;
+            offset += 4;
+            for _ in 0..npoints {
+                let x = read_f64_at(blob, offset, little_endian)?;
+                let y = read_f64_at(blob, offset + 8, little_endian)?;
+                update_bbox(acc, x, y);
+                offset += coord_size;
+            }
+        }
+        WKB_POLYGON => {
+            let nrings = read_u32_at(blob, offset, little_endian)? as usize;
+            offset += 4;
+            for _ in 0..nrings {
+                let npoints = read_u32_at(blob, offset, little_endian)? as usize;
+                offset += 4;
+                for _ in 0..npoints {
+                    let x = read_f64_at(blob, offset, little_endian)?;
+                    let y = read_f64_at(blob, offset + 8, little_endian)?;
+                    update_bbox(acc, x, y);
+                    offset += coord_size;
+                }
+            }
+        }
+        WKB_MULTIPOINT | WKB_MULTILINESTRING | WKB_MULTIPOLYGON | WKB_GEOMETRYCOLLECTION => {
+            let count = read_u32_at(blob, offset, little_endian)? as usize;
+            offset += 4;
+            for _ in 0..count {
+                // Each nested element carries its own WKB mini-header
+                // (byte-order byte + 4-byte type). EWKB's SRID flag is only
+                // valid at the top level; nested elements use plain WKB.
+                if blob.len() < offset + 5 {
+                    return Err(SqliteGisError::InvalidEwkb(format!(
+                        "nested WKB header truncated at offset {offset}"
+                    )));
+                }
+                let nested_le = match blob[offset] {
+                    0x01 => true,
+                    0x00 => false,
+                    other => {
+                        return Err(SqliteGisError::InvalidEwkb(format!(
+                            "invalid nested byte-order marker {other} at offset {offset}"
+                        )));
+                    }
+                };
+                let nested_type = read_u32_at(blob, offset + 1, nested_le)?;
+                let nested_geom_type = nested_type & 0x1FFFFFFF;
+                let nested_has_z = (nested_type & EWKB_Z_FLAG) != 0;
+                let nested_has_m = (nested_type & EWKB_M_FLAG) != 0;
+                offset += 5;
+                offset = walk_for_mbr(
+                    blob,
+                    offset,
+                    nested_geom_type,
+                    nested_has_z,
+                    nested_has_m,
+                    nested_le,
+                    acc,
+                )?;
+            }
+        }
+        other => {
+            return Err(SqliteGisError::InvalidEwkb(format!(
+                "unsupported geometry type code {other} during MBR extraction"
+            )));
+        }
+    }
+
+    Ok(offset)
 }
 
 fn patch_wkb_with_srid(iso_wkb: &[u8], srid_val: i32) -> Result<Vec<u8>> {
@@ -857,5 +1051,129 @@ mod tests {
 
         let err = validate_xy_ewkb_payload(&blob).expect_err("Z/M payload must be rejected");
         assert!(format!("{err}").contains("unsupported coordinate dimensions"));
+    }
+
+    // -----------------------------------------------------------------
+    // extract_mbr coverage
+    // -----------------------------------------------------------------
+
+    /// Assert that `extract_mbr` agrees with the reference path
+    /// (`parse_ewkb` + `geo::BoundingRect`) on `wkt`. Both should be
+    /// `None` for empty geometries, or matching `Rect` for non-empty.
+    fn assert_mbr_matches_reference(wkt: &str) {
+        use geo::BoundingRect;
+
+        let blob = geom_from_text(wkt, None).expect("seed blob from WKT");
+        let fast = extract_mbr(&blob).expect("fast MBR path must succeed on valid blob");
+        let (geom, _) = parse_ewkb(&blob).expect("reference parse must succeed");
+        let reference = geom.bounding_rect();
+
+        match (fast, reference) {
+            (None, None) => {}
+            (Some(f), Some(r)) => {
+                assert!(
+                    (f.min().x - r.min().x).abs() < 1e-12
+                        && (f.min().y - r.min().y).abs() < 1e-12
+                        && (f.max().x - r.max().x).abs() < 1e-12
+                        && (f.max().y - r.max().y).abs() < 1e-12,
+                    "MBR mismatch for {wkt:?}: fast={f:?}, reference={r:?}",
+                );
+            }
+            other => panic!("MBR presence mismatch for {wkt:?}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_mbr_point_matches_reference() {
+        assert_mbr_matches_reference("POINT(1 2)");
+        assert_mbr_matches_reference("POINT(-180 -90)");
+        assert_mbr_matches_reference("POINT(180 90)");
+    }
+
+    #[test]
+    fn extract_mbr_empty_point_returns_none() {
+        let blob = geom_from_text("POINT EMPTY", None).expect("seed");
+        assert!(extract_mbr(&blob).expect("ok").is_none());
+    }
+
+    #[test]
+    fn extract_mbr_linestring_matches_reference() {
+        assert_mbr_matches_reference("LINESTRING(0 0, 10 0, 10 5, 0 5)");
+        assert_mbr_matches_reference("LINESTRING(-5 -10, 5 10)");
+    }
+
+    #[test]
+    fn extract_mbr_polygon_with_hole_matches_reference() {
+        // Outer ring + inner hole. The hole's vertices are within the outer
+        // ring's bbox so the MBR is the outer ring's extent.
+        assert_mbr_matches_reference(
+            "POLYGON((0 0, 10 0, 10 10, 0 10, 0 0), (2 2, 4 2, 4 4, 2 4, 2 2))",
+        );
+    }
+
+    #[test]
+    fn extract_mbr_multipoint_matches_reference() {
+        assert_mbr_matches_reference("MULTIPOINT((1 2), (5 5), (-3 4))");
+    }
+
+    #[test]
+    fn extract_mbr_multilinestring_matches_reference() {
+        assert_mbr_matches_reference("MULTILINESTRING((0 0, 1 1), (5 5, 6 7, -2 3))");
+    }
+
+    #[test]
+    fn extract_mbr_multipolygon_matches_reference() {
+        assert_mbr_matches_reference(
+            "MULTIPOLYGON(((0 0, 1 0, 1 1, 0 1, 0 0)), ((10 10, 20 10, 20 20, 10 20, 10 10)))",
+        );
+    }
+
+    #[test]
+    fn extract_mbr_geometrycollection_matches_reference() {
+        assert_mbr_matches_reference(
+            "GEOMETRYCOLLECTION(POINT(1 2), LINESTRING(0 0, 5 5), POLYGON((0 0, 2 0, 2 2, 0 2, 0 0)))",
+        );
+    }
+
+    #[test]
+    fn extract_mbr_respects_big_endian_byte_order() {
+        // Manually build a big-endian POINT(3 4) blob.
+        let mut blob = vec![0x00];
+        blob.extend_from_slice(&WKB_POINT.to_be_bytes());
+        blob.extend_from_slice(&3.0f64.to_be_bytes());
+        blob.extend_from_slice(&4.0f64.to_be_bytes());
+
+        let mbr = extract_mbr(&blob).expect("ok").expect("non-empty");
+        assert_eq!(mbr.min().x, 3.0);
+        assert_eq!(mbr.min().y, 4.0);
+        assert_eq!(mbr.max().x, 3.0);
+        assert_eq!(mbr.max().y, 4.0);
+    }
+
+    #[test]
+    fn extract_mbr_respects_srid_flag_offset() {
+        // POINT(7 8) with SRID flag: header is 9 bytes (1 + 4 + 4), coords follow.
+        let blob = geom_from_text("POINT(7 8)", Some(4326)).expect("seed");
+        let mbr = extract_mbr(&blob).expect("ok").expect("non-empty");
+        assert_eq!(mbr.min().x, 7.0);
+        assert_eq!(mbr.max().y, 8.0);
+    }
+
+    #[test]
+    fn extract_mbr_rejects_truncated_point_blob() {
+        // Header says POINT but no coordinate bytes follow.
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_POINT.to_le_bytes());
+        assert!(extract_mbr(&blob).is_err());
+    }
+
+    #[test]
+    fn extract_mbr_rejects_truncated_polygon_blob() {
+        // Polygon header says 1 ring with 4 points, but no coords follow.
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_POLYGON.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes()); // nrings
+        blob.extend_from_slice(&4u32.to_le_bytes()); // npoints
+        assert!(extract_mbr(&blob).is_err());
     }
 }

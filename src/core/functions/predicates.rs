@@ -10,7 +10,7 @@ use geo::coordinate_position::CoordPos;
 use geo::dimensions::Dimensions;
 
 use crate::core::error::{Result, SqliteGisError};
-use crate::core::ewkb::parse_ewkb_pair;
+use crate::core::ewkb::{extract_mbr, parse_ewkb_pair};
 
 /// ST_Intersects: true if the two geometries share at least one point.
 ///
@@ -29,6 +29,18 @@ use crate::core::ewkb::parse_ewkb_pair;
 /// assert!(!st_intersects(&a, &far).unwrap());
 /// ```
 pub fn st_intersects(a: &[u8], b: &[u8]) -> Result<bool> {
+    // MBR-only fastpath. Walking the EWKB bytes for just the bbox is
+    // 10-100x cheaper than fully decoding both geometries, so on the
+    // common "filter many points against one window" workload where most
+    // rows are negative this short-circuits the full intersect test for
+    // the vast majority of calls. Falls through to the full path when
+    // either bbox cannot be computed (malformed blob) or the bboxes
+    // actually do overlap.
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if !ra.intersects(&rb) {
+            return Ok(false);
+        }
+    }
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
     Ok(ga.intersects(&gb))
 }
