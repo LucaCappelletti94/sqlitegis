@@ -1,0 +1,19 @@
+# cdylib drop site populated by CI's before_build.sh; never commit a
+# stale binary.
+sqlitegis/_bin/*.so
+sqlitegis/_bin/*.dylib
+sqlitegis/_bin/*.dll
+
+# Python build artefacts.
+dist/
+build/
+*.egg-info/
+__pycache__/
+
+# Tool caches and coverage data.
+.coverage
+.coverage.*
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/

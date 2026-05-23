@@ -1,0 +1,3 @@
+# Hatchling needs sqlitegis/_bin/ to exist at sdist time so the layout
+# resolves; the actual cdylib is dropped into this directory by the CI
+# before-build script and not tracked in git.

@@ -1,0 +1,102 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sqlitegis"
+# Version is overwritten by the CI workflow from the cargo crate version
+# at build time. The placeholder here only exists to keep `python -m build`
+# happy during local dry-runs.
+version = "0.0.0"
+description = "PostGIS-style spatial functions for SQLite, packaged as a loadable extension. Pre-built wheels of the Rust sqlitegis crate."
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.9"
+authors = [{ name = "Luca Cappelletti" }]
+keywords = ["geospatial", "sqlite", "postgis", "spatial", "ewkb"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+
+[project.urls]
+Homepage = "https://github.com/LucaCappelletti94/sqlitegis"
+Repository = "https://github.com/LucaCappelletti94/sqlitegis"
+Documentation = "https://docs.rs/sqlitegis"
+Changelog = "https://github.com/LucaCappelletti94/sqlitegis/releases"
+
+# Wheel layout. The native cdylib is placed under sqlitegis/_bin/ by the CI
+# before-build hook (see .github/workflows/python-wheels.yml). `packages`
+# brings in the Python module + py.typed marker; `artifacts` brings in
+# the cdylib that lives outside of source control.
+[tool.hatch.build.targets.wheel]
+packages = ["sqlitegis"]
+artifacts = [
+    "sqlitegis/_bin/*.so",
+    "sqlitegis/_bin/*.dylib",
+    "sqlitegis/_bin/*.dll",
+]
+
+# Source distribution: include the Python module but not the cdylib (the
+# sdist is a fallback for environments where no wheel is available; in that
+# case the user would build the Rust crate themselves). Drop _bin/* from
+# the sdist so we do not ship a stale binary by accident.
+[tool.hatch.build.targets.sdist]
+include = ["sqlitegis/__init__.py", "sqlitegis/py.typed", "README.md"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "build>=1.2",
+    "twine>=5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --cov=sqlitegis --cov-report=term-missing --cov-fail-under=100"
+
+[tool.coverage.run]
+source = ["sqlitegis"]
+# The _bin/ directory ships the cdylib, not Python. Exclude it from line
+# accounting so the .so does not show up as 0% covered.
+omit = ["sqlitegis/_bin/*"]
+
+[tool.coverage.report]
+exclude_also = [
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+skip_covered = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# Pyflakes (F), pycodestyle (E, W), isort (I), flake8-bugbear (B),
+# pyupgrade (UP), flake8-simplify (SIM), Ruff (RUF). Reasonable default
+# for a small Python surface that wraps a cdylib.
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pytest fixtures use names that collide with their own arguments by
+# design; that pattern is the whole point of fixtures.
+"tests/*" = ["B008"]
+
+[tool.mypy]
+# Project supports CPython 3.9+ but recent mypy releases only accept
+# 3.10+ as a check target. `from __future__ import annotations` is on
+# everywhere so checking under 3.10 still validates 3.9 syntax compat.
+python_version = "3.10"
+strict = true

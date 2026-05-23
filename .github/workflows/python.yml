@@ -1,0 +1,97 @@
+name: Python CI
+
+# Per-push / per-PR gate for the `bindings/python` Python wheel surface:
+# ruff (lint + format), mypy strict, and the pytest suite with 100%
+# coverage. The release-time multi-platform wheel build lives in
+# python-wheels.yml; this workflow is the fast feedback loop that runs on
+# every change without spinning the cibuildwheel matrix.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bindings/python/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/python.yml"
+  pull_request:
+    paths:
+      - "bindings/python/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/python.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Pure-Python lint and type check. Does not need the cdylib so it can
+  # finish in seconds and gate the rest of the workflow.
+  lint:
+    name: ruff + mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: bindings/python
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --group dev
+      - run: uv run ruff check sqlitegis tests
+      - run: uv run ruff format --check sqlitegis tests
+      - run: uv run mypy sqlitegis tests
+      # Packaging-config smoke: catch hatchling/pyproject regressions on
+      # every PR. `_bin/.gitkeep` keeps the force-include target valid;
+      # the wheel produced here is empty of cdylib by design (the release
+      # pipeline stages the real binary in `python-wheels.yml`).
+      - name: python -m build --wheel
+        run: uv run python -m build --wheel
+      - name: twine check dist/*
+        run: uv run twine check dist/*
+
+  # pytest with the 100% coverage gate (configured in pyproject.toml).
+  # Needs the cdylib, which we build in release mode with bundled-sqlite
+  # so the binary matches what the wheel actually ships. Matrix covers
+  # the minimum supported Python (3.9) and the latest stable (3.13);
+  # the full cp39-cp313 sweep runs in python-wheels.yml on release tags.
+  test:
+    name: pytest + coverage (py${{ matrix.python-version }})
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: python-cdylib
+      - name: Build sqlitegis cdylib
+        run: cargo build --release --no-default-features --features sqlite-extension,bundled-sqlite
+      - name: Stage cdylib into bindings/python/sqlitegis/_bin/
+        run: |
+          mkdir -p bindings/python/sqlitegis/_bin
+          cp target/release/libsqlitegis.so bindings/python/sqlitegis/_bin/
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - name: uv sync
+        working-directory: bindings/python
+        run: uv sync --frozen --group dev
+      - name: pytest
+        working-directory: bindings/python
+        run: uv run pytest

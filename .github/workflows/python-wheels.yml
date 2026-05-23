@@ -1,0 +1,161 @@
+name: Python wheels
+
+on:
+  push:
+    tags:
+      # py-v0.1.4 -> production PyPI release.
+      # py-v0.1.4-rc1 -> TestPyPI release.
+      - "py-v*"
+  workflow_dispatch:
+    inputs:
+      target_pypi:
+        description: "Where to upload the resulting wheels"
+        type: choice
+        required: true
+        default: "testpypi"
+        options:
+          - "testpypi"
+          - "pypi"
+
+concurrency:
+  group: python-wheels-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Build platform-specific wheels via cibuildwheel. Each matrix entry runs
+  # the same before-build script that installs Rust, compiles the cdylib
+  # with sqlite-extension + bundled-sqlite, and drops the binary into
+  # bindings/python/sqlitegis/_bin/ where hatchling picks it up.
+  build:
+    name: Wheel ${{ matrix.platform }} on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: manylinux_x86_64
+            cibw_build: "cp39-manylinux_x86_64"
+            cibw_arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: manylinux_aarch64
+            cibw_build: "cp39-manylinux_aarch64"
+            cibw_arch: aarch64
+          - runner: ubuntu-latest
+            platform: musllinux_x86_64
+            cibw_build: "cp39-musllinux_x86_64"
+            cibw_arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: musllinux_aarch64
+            cibw_build: "cp39-musllinux_aarch64"
+            cibw_arch: aarch64
+          - runner: macos-13
+            platform: macosx_x86_64
+            cibw_build: "cp39-macosx_x86_64"
+            cibw_arch: x86_64
+            cargo_target: x86_64-apple-darwin
+          - runner: macos-latest
+            platform: macosx_arm64
+            cibw_build: "cp39-macosx_arm64"
+            cibw_arch: arm64
+            cargo_target: aarch64-apple-darwin
+          - runner: windows-latest
+            platform: win_amd64
+            cibw_build: "cp39-win_amd64"
+            cibw_arch: AMD64
+            cargo_target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v5
+
+      # Stamp the placeholder version in bindings/python/pyproject.toml
+      # with the crate version pulled from the root Cargo.toml so the
+      # wheel and the cargo crate ship under the same X.Y.Z.
+      - name: Sync wheel version with cargo crate version
+        shell: bash
+        run: |
+          CRATE_VERSION=$(grep -m 1 '^version = ' Cargo.toml | sed -E 's/.*"([0-9.]+(-[A-Za-z0-9.-]+)?)".*/\1/')
+          echo "Crate version: ${CRATE_VERSION}"
+          # Replace the placeholder version = "0.0.0" with the real one.
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            sed -i '' -E "s/^version = \"0\\.0\\.0\"$/version = \"${CRATE_VERSION}\"/" bindings/python/pyproject.toml
+          else
+            sed -i -E "s/^version = \"0\\.0\\.0\"$/version = \"${CRATE_VERSION}\"/" bindings/python/pyproject.toml
+          fi
+          grep '^version = ' bindings/python/pyproject.toml
+
+      - uses: pypa/cibuildwheel@v2.21
+        env:
+          CIBW_BUILD: ${{ matrix.cibw_build }}
+          CIBW_ARCHS: ${{ matrix.cibw_arch }}
+          # Build a single wheel per platform: tag it as py3-none-<plat> so
+          # the same artifact works for every Python 3.x. The cp39 prefix
+          # above is just the cibuildwheel filter that picks one Python to
+          # run inside; we drop the ABI tag below.
+          CIBW_BUILD_VERBOSITY: 1
+          # cibuildwheel runs this in the build container before each wheel
+          # build. Installs rustup with the right target and produces the
+          # cdylib.
+          CIBW_BEFORE_BUILD: >-
+            bash bindings/python/scripts/before_build.sh "${{ matrix.cargo_target }}"
+          CIBW_BEFORE_BUILD_WINDOWS: >-
+            bash bindings/python/scripts/before_build.sh "${{ matrix.cargo_target }}"
+          # Install pytest into cibuildwheel's per-wheel test venv and
+          # run the bindings/python/tests suite against the freshly built
+          # wheel. The suite exercises the public surface (extension_path,
+          # register, connect), the scalar function catalogue, the spatial
+          # index DDL helpers, and the negative-path validations.
+          CIBW_TEST_REQUIRES: "pytest>=8 pytest-cov>=5"
+          CIBW_TEST_COMMAND: "pytest {project}/bindings/python/tests"
+          # The wheel only contains the cdylib and a pure-Python module;
+          # tag it accordingly so pip selects it on any CPython 3.9+.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
+            auditwheel repair -w {dest_dir} {wheel}
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-
+            delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
+        with:
+          package-dir: bindings/python
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      # PyPI trusted-publishing environment. Configure in repo Settings >
+      # Environments. Two environments are expected: testpypi and pypi.
+      name: ${{ contains(github.ref, '-rc') && 'testpypi' || (github.event.inputs.target_pypi || 'pypi') }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheel-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Publish to TestPyPI
+        if: contains(github.ref, '-rc') || github.event.inputs.target_pypi == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+
+      - name: Publish to PyPI
+        if: ${{ !contains(github.ref, '-rc') && github.event.inputs.target_pypi != 'testpypi' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
