@@ -311,25 +311,24 @@ fn bench_astext_throughput(c: &mut Criterion) {
 }
 
 /// GEOS-heavy workload: buffer a small polygon by 0.1 degrees, then
-/// test point-in-buffered-polygon containment for every row. The buffer
-/// step is the GEOS-heavy work (we use `geo::Buffer`, SpatiaLite uses
+/// take its per-row intersection with the point column. The buffer step
+/// is the GEOS-heavy work (we use `geo::Buffer`, SpatiaLite uses
 /// `GEOSBufferWithParams`); SQLite folds it to a constant subexpression
-/// so the buffer runs once per query, then `ST_Contains(buffer, geom)`
-/// runs per row. We had to use `ST_Contains(polygon, point)` rather
-/// than `ST_Intersection(point, polygon)` because sqlitegis's
-/// `ST_Intersection` is currently polygon-typed in both arguments.
-/// The data shape is points, so a true polygon-vs-polygon intersection
-/// would require a different seed.
+/// so the buffer runs once per query, then `ST_Intersection(buffer, geom)`
+/// produces the per-row intersected geometry, which `ST_IsEmpty` filters
+/// for non-empty results. This exercises the full intersection pipeline
+/// on a mixed Polygon-vs-Point input shape (now supported in sqlitegis
+/// after the decompose/intersect/pack dispatch landed).
 fn bench_buffer_intersection(c: &mut Criterion) {
     let db_g = unsafe { open_sqlitegis_db() };
     let db_s = unsafe { open_spatialite_db() };
     let sql = "SELECT COUNT(*) FROM places \
-               WHERE ST_Contains( \
+               WHERE NOT ST_IsEmpty(ST_Intersection( \
                    ST_Buffer(ST_GeomFromText('POLYGON((10 20, 11 20, 11 21, 10 21, 10 20))', 4326), 0.1), \
                    geom \
-               )";
+               ))";
 
-    let mut group = c.benchmark_group("ST_Buffer + ST_Contains bulk");
+    let mut group = c.benchmark_group("ST_Buffer + ST_Intersection bulk");
     group.throughput(Throughput::Elements(N_POINTS as u64));
     group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
         b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
