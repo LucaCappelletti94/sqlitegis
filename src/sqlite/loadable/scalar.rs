@@ -1,20 +1,18 @@
-//! SQLite loadable-extension entry point built on
-//! [`sqlite-loadable`](https://crates.io/crates/sqlite-loadable).
+//! Scalar callback definitions for the loadable extension.
 //!
-//! Every SQLite call from the callbacks below goes through the host's
-//! `sqlite3_api_routines` table that `sqlite-loadable`'s
-//! `#[sqlite_entrypoint]` macro captures at load time. The produced cdylib
-//! therefore has no link-time dependency on a specific libsqlite3 and works
-//! against whichever libsqlite3 the host (Python, the SQLite CLI, etc.)
-//! has loaded.
+//! Layout:
 //!
-//! Compare to [`crate::sqlite::ffi`] which is the in-process direct
-//! `libsqlite3-sys` path used by Diesel. The two modules ship parallel
-//! callback implementations: same `crate::core::functions::*` logic,
-//! different FFI plumbing.
+//! - First, a small family of `macro_rules!` that emit a `fn name(ctx,
+//!   values) -> Result<()>` per call shape (one blob, two blobs, blob plus
+//!   integer, etc.). Each macro inlines the NULL handling and the error
+//!   conversion so the per-function lines below stay short.
+//! - Then, hand-written callbacks for shapes the macros do not cover
+//!   (variadic SRID arguments, mixed text/blob args, NULL-required text).
+//! - Last, the macro invocations that generate one `fn *_cb` per SQL
+//!   function. The names match the ones in the catalog so the entry point
+//!   in `mod.rs` can refer to them directly.
 
 use sqlite_loadable::prelude::*;
-use sqlite_loadable::scalar::define_scalar_function;
 use sqlite_loadable::{api, errors::Error, Result};
 
 use crate::core::functions::accessors::*;
@@ -24,82 +22,10 @@ use crate::core::functions::measurement::*;
 use crate::core::functions::operations::*;
 use crate::core::functions::predicates::*;
 
-// -------------------------------------------------------------------------
-// Argument-extraction helpers (sqlite-loadable api-routines flavour)
-// -------------------------------------------------------------------------
-
-fn arg_blob_or_null(values: &[*mut sqlite3_value], i: usize) -> Option<&[u8]> {
-    let v = &values[i];
-    if api::value_is_null(v) {
-        return None;
-    }
-    Some(api::value_blob(v))
-}
-
-fn arg_text_or_null(values: &[*mut sqlite3_value], i: usize) -> Option<Result<&str>> {
-    let v = &values[i];
-    if api::value_is_null(v) {
-        return None;
-    }
-    Some(api::value_text(v).map_err(|e| Error::new_message(format!("invalid utf-8: {e}"))))
-}
-
-fn arg_double(values: &[*mut sqlite3_value], i: usize) -> Option<f64> {
-    let v = &values[i];
-    if api::value_is_null(v) {
-        return None;
-    }
-    Some(api::value_double(v))
-}
-
-fn arg_i32(values: &[*mut sqlite3_value], i: usize) -> Option<i32> {
-    let v = &values[i];
-    if api::value_is_null(v) {
-        return None;
-    }
-    Some(api::value_int(v))
-}
-
-fn any_null(values: &[*mut sqlite3_value]) -> bool {
-    values.iter().any(api::value_is_null)
-}
-
-fn mk_err<E: std::fmt::Display>(label: &str, e: E) -> Error {
-    Error::new_message(format!("{label}: {e}"))
-}
-
-// -------------------------------------------------------------------------
-// Result-setting helpers
-// -------------------------------------------------------------------------
-
-fn set_blob_vec(ctx: *mut sqlite3_context, v: Vec<u8>) -> Result<()> {
-    api::result_blob(ctx, &v);
-    Ok(())
-}
-
-fn set_text_str(ctx: *mut sqlite3_context, v: impl AsRef<str>) -> Result<()> {
-    api::result_text(ctx, v.as_ref())
-}
-
-fn set_f64(ctx: *mut sqlite3_context, v: f64) -> Result<()> {
-    api::result_double(ctx, v);
-    Ok(())
-}
-
-fn set_i32(ctx: *mut sqlite3_context, v: i32) -> Result<()> {
-    api::result_int(ctx, v);
-    Ok(())
-}
-
-fn set_i64(ctx: *mut sqlite3_context, v: i64) -> Result<()> {
-    api::result_int64(ctx, v);
-    Ok(())
-}
-
-fn set_bool(ctx: *mut sqlite3_context, v: bool) -> Result<()> {
-    api::result_bool(ctx, v);
-    Ok(())
-}
+use super::args::{
+    any_null, arg_blob_or_null, arg_double, arg_i32, arg_text_or_null, mk_err, set_blob_vec,
+    set_bool, set_f64, set_i32, set_i64, set_text_str,
+};
 
 // -------------------------------------------------------------------------
 // Macros that emit a sqlite-loadable scalar callback per SQL function
@@ -108,7 +34,10 @@ fn set_bool(ctx: *mut sqlite3_context, v: bool) -> Result<()> {
 /// 1 blob -> Result<T>, with a custom setter. NULL input -> NULL output.
 macro_rules! sl_blob {
     ($name:ident, $label:expr, $core_fn:expr, $set:ident) => {
-        fn $name(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+        pub(super) fn $name(
+            ctx: *mut sqlite3_context,
+            values: &[*mut sqlite3_value],
+        ) -> Result<()> {
             let Some(b) = arg_blob_or_null(values, 0) else {
                 api::result_null(ctx);
                 return Ok(());
@@ -125,7 +54,10 @@ macro_rules! sl_blob {
 /// 2 blobs -> Result<T>, with a custom setter. Either NULL input -> NULL output.
 macro_rules! sl_blob2 {
     ($name:ident, $label:expr, $core_fn:expr, $set:ident) => {
-        fn $name(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+        pub(super) fn $name(
+            ctx: *mut sqlite3_context,
+            values: &[*mut sqlite3_value],
+        ) -> Result<()> {
             let Some(a) = arg_blob_or_null(values, 0) else {
                 api::result_null(ctx);
                 return Ok(());
@@ -146,7 +78,10 @@ macro_rules! sl_blob2 {
 /// 1 blob -> Result<Option<f64>>, where None maps to SQL NULL.
 macro_rules! sl_blob_opt_f64 {
     ($name:ident, $label:expr, $core_fn:expr) => {
-        fn $name(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+        pub(super) fn $name(
+            ctx: *mut sqlite3_context,
+            values: &[*mut sqlite3_value],
+        ) -> Result<()> {
             let Some(b) = arg_blob_or_null(values, 0) else {
                 api::result_null(ctx);
                 return Ok(());
@@ -164,7 +99,10 @@ macro_rules! sl_blob_opt_f64 {
 /// blob + i32 -> Result<Vec<u8>>.
 macro_rules! sl_blob_i32_blob {
     ($name:ident, $label:expr, $arg_name:expr, $core_fn:expr) => {
-        fn $name(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+        pub(super) fn $name(
+            ctx: *mut sqlite3_context,
+            values: &[*mut sqlite3_value],
+        ) -> Result<()> {
             let Some(b) = arg_blob_or_null(values, 0) else {
                 api::result_null(ctx);
                 return Ok(());
@@ -187,7 +125,10 @@ macro_rules! sl_blob_i32_blob {
 /// blob + f64 -> Result<Vec<u8>>.
 macro_rules! sl_blob_f64_blob {
     ($name:ident, $label:expr, $arg_name:expr, $core_fn:expr) => {
-        fn $name(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+        pub(super) fn $name(
+            ctx: *mut sqlite3_context,
+            values: &[*mut sqlite3_value],
+        ) -> Result<()> {
             let Some(b) = arg_blob_or_null(values, 0) else {
                 api::result_null(ctx);
                 return Ok(());
@@ -210,7 +151,10 @@ macro_rules! sl_blob_f64_blob {
 /// blob + f64 + f64 -> Result<Vec<u8>>.
 macro_rules! sl_blob_f64_f64_blob {
     ($name:ident, $label:expr, $core_fn:expr) => {
-        fn $name(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+        pub(super) fn $name(
+            ctx: *mut sqlite3_context,
+            values: &[*mut sqlite3_value],
+        ) -> Result<()> {
             let Some(b) = arg_blob_or_null(values, 0) else {
                 api::result_null(ctx);
                 return Ok(());
@@ -235,7 +179,10 @@ macro_rules! sl_blob_f64_f64_blob {
 /// 2 blobs + f64 -> Result<bool>.
 macro_rules! sl_blob2_f64_bool {
     ($name:ident, $label:expr, $core_fn:expr) => {
-        fn $name(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+        pub(super) fn $name(
+            ctx: *mut sqlite3_context,
+            values: &[*mut sqlite3_value],
+        ) -> Result<()> {
             let Some(a) = arg_blob_or_null(values, 0) else {
                 api::result_null(ctx);
                 return Ok(());
@@ -262,7 +209,10 @@ macro_rules! sl_blob2_f64_bool {
 /// 2 blobs + text -> Result<bool>.
 macro_rules! sl_blob2_text_bool {
     ($name:ident, $label:expr, $core_fn:expr) => {
-        fn $name(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+        pub(super) fn $name(
+            ctx: *mut sqlite3_context,
+            values: &[*mut sqlite3_value],
+        ) -> Result<()> {
             let Some(a) = arg_blob_or_null(values, 0) else {
                 api::result_null(ctx);
                 return Ok(());
@@ -293,7 +243,10 @@ macro_rules! sl_blob2_text_bool {
 #[allow(unused_macros)]
 macro_rules! sl_text2_bool {
     ($name:ident, $label:expr, $core_fn:expr) => {
-        fn $name(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+        pub(super) fn $name(
+            ctx: *mut sqlite3_context,
+            values: &[*mut sqlite3_value],
+        ) -> Result<()> {
             let Some(a) = arg_text_or_null(values, 0) else {
                 api::result_null(ctx);
                 return Ok(());
@@ -318,7 +271,10 @@ macro_rules! sl_text2_bool {
 // -------------------------------------------------------------------------
 
 // ST_GeomFromText(wkt) and ST_GeomFromText(wkt, srid)
-fn st_geomfromtext_1(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_geomfromtext_1(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     let Some(t) = arg_text_or_null(values, 0) else {
         api::result_null(ctx);
         return Ok(());
@@ -330,7 +286,10 @@ fn st_geomfromtext_1(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -
     }
 }
 
-fn st_geomfromtext_2(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_geomfromtext_2(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     let Some(t) = arg_text_or_null(values, 0) else {
         api::result_null(ctx);
         return Ok(());
@@ -344,7 +303,10 @@ fn st_geomfromtext_2(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -
 }
 
 // ST_GeomFromWKB(blob) and ST_GeomFromWKB(blob, srid)
-fn st_geomfromwkb_1(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_geomfromwkb_1(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     let Some(b) = arg_blob_or_null(values, 0) else {
         api::result_null(ctx);
         return Ok(());
@@ -355,7 +317,10 @@ fn st_geomfromwkb_1(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) ->
     }
 }
 
-fn st_geomfromwkb_2(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_geomfromwkb_2(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     let Some(b) = arg_blob_or_null(values, 0) else {
         api::result_null(ctx);
         return Ok(());
@@ -368,7 +333,10 @@ fn st_geomfromwkb_2(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) ->
 }
 
 // ST_GeomFromGeoJSON(text)
-fn st_geomfromgeojson(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_geomfromgeojson(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     let Some(t) = arg_text_or_null(values, 0) else {
         return Err(Error::new_message(
             "ST_GeomFromGeoJSON: json cannot be NULL",
@@ -382,7 +350,10 @@ fn st_geomfromgeojson(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) 
 }
 
 // ST_Point(x, y) and ST_Point(x, y, srid)
-fn st_point_2_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_point_2_cb(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     if any_null(&values[..2]) {
         api::result_null(ctx);
         return Ok(());
@@ -395,7 +366,10 @@ fn st_point_2_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Re
     }
 }
 
-fn st_point_3_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_point_3_cb(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     if any_null(values) {
         api::result_null(ctx);
         return Ok(());
@@ -410,7 +384,10 @@ fn st_point_3_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Re
 }
 
 // ST_MakeEnvelope(xmin, ymin, xmax, ymax) and (..., srid)
-fn st_makeenvelope_4_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_makeenvelope_4_cb(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     if any_null(&values[..4]) {
         api::result_null(ctx);
         return Ok(());
@@ -425,7 +402,10 @@ fn st_makeenvelope_4_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]
     }
 }
 
-fn st_makeenvelope_5_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_makeenvelope_5_cb(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     if any_null(values) {
         api::result_null(ctx);
         return Ok(());
@@ -442,7 +422,7 @@ fn st_makeenvelope_5_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]
 }
 
 // ST_PointN(geom, n) - core fn takes (blob, i32, Option<srid>); pass None.
-fn st_pointn_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_pointn_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
     let Some(b) = arg_blob_or_null(values, 0) else {
         api::result_null(ctx);
         return Ok(());
@@ -456,10 +436,11 @@ fn st_pointn_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Res
     }
 }
 
-// ST_InteriorRingN, ST_GeometryN follow the same shape as ST_PointN (blob + i32 -> Vec<u8>).
-
 // ST_SetSRID(geom, srid)
-fn st_setsrid_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_setsrid_cb(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     let Some(b) = arg_blob_or_null(values, 0) else {
         api::result_null(ctx);
         return Ok(());
@@ -474,7 +455,10 @@ fn st_setsrid_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Re
 }
 
 // ST_RelateMatch(matrix, pattern) - both text.
-fn st_relatematch_cb(ctx: *mut sqlite3_context, values: &[*mut sqlite3_value]) -> Result<()> {
+pub(super) fn st_relatematch_cb(
+    ctx: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
     let Some(a) = arg_text_or_null(values, 0) else {
         api::result_null(ctx);
         return Ok(());
@@ -673,133 +657,3 @@ sl_blob2!(st_crosses_cb, "ST_Crosses", st_crosses, set_bool);
 sl_blob2!(st_overlaps_cb, "ST_Overlaps", st_overlaps, set_bool);
 sl_blob2!(st_relate_cb, "ST_Relate", st_relate, set_text_str);
 sl_blob2_text_bool!(st_relate_bool_cb, "ST_Relate", st_relate_match_geoms);
-
-// CreateSpatialIndex / DropSpatialIndex are SQLITE_DIRECTONLY DDL helpers.
-// Their bodies live in `crate::sqlite::ffi` because they call back into
-// SQLite via direct libsqlite3-sys symbols, which the loadable variant
-// cannot do safely. The cdylib produced from `sqlite-extension` alone
-// exposes the scalar functions only; the user can run the equivalent
-// `CREATE VIRTUAL TABLE ... USING rtree` SQL by hand if they need it.
-// Issue tracker entry to revisit: port the DDL logic via
-// `sqlite_loadable`'s `ext::sqlite3ext_exec` routine indirection.
-
-// -------------------------------------------------------------------------
-// Entry point invoked by SQLite at load_extension time
-// -------------------------------------------------------------------------
-
-/// C ABI entry point invoked by SQLite when this cdylib is loaded with
-/// `SELECT load_extension('libsqlitegis')`. The `#[sqlite_entrypoint]`
-/// attribute expands this into a `#[no_mangle]` extern "C" wrapper that
-/// captures the host's `sqlite3_api_routines` pointer before delegating to
-/// this body, and walks the catalog registering every scalar function.
-#[sqlite_entrypoint]
-pub fn sqlite3_sqlitegis_init(db: *mut sqlite3) -> Result<()> {
-    let det = FunctionFlags::UTF8 | FunctionFlags::DETERMINISTIC;
-    let direct = FunctionFlags::UTF8 | FunctionFlags::DIRECTONLY;
-
-    // I/O
-    define_scalar_function(db, "ST_GeomFromText", 1, st_geomfromtext_1, det)?;
-    define_scalar_function(db, "ST_GeomFromText", 2, st_geomfromtext_2, det)?;
-    define_scalar_function(db, "ST_GeomFromWKB", 1, st_geomfromwkb_1, det)?;
-    define_scalar_function(db, "ST_GeomFromWKB", 2, st_geomfromwkb_2, det)?;
-    define_scalar_function(db, "ST_GeomFromEWKB", 1, st_geomfromewkb_cb, det)?;
-    define_scalar_function(db, "ST_GeomFromGeoJSON", 1, st_geomfromgeojson, det)?;
-    define_scalar_function(db, "ST_AsText", 1, st_astext_cb, det)?;
-    define_scalar_function(db, "ST_AsEWKT", 1, st_asewkt_cb, det)?;
-    define_scalar_function(db, "ST_AsBinary", 1, st_asbinary_cb, det)?;
-    define_scalar_function(db, "ST_AsEWKB", 1, st_asewkb_cb, det)?;
-    define_scalar_function(db, "ST_AsGeoJSON", 1, st_asgeojson_cb, det)?;
-
-    // Constructors
-    define_scalar_function(db, "ST_Point", 2, st_point_2_cb, det)?;
-    define_scalar_function(db, "ST_Point", 3, st_point_3_cb, det)?;
-    define_scalar_function(db, "ST_MakePoint", 2, st_point_2_cb, det)?;
-    define_scalar_function(db, "ST_MakePoint", 3, st_point_3_cb, det)?;
-    define_scalar_function(db, "ST_MakeLine", 2, st_makeline_cb, det)?;
-    define_scalar_function(db, "ST_MakePolygon", 1, st_makepolygon_cb, det)?;
-    define_scalar_function(db, "ST_Collect", 2, st_collect_cb, det)?;
-    define_scalar_function(db, "ST_MakeEnvelope", 4, st_makeenvelope_4_cb, det)?;
-    define_scalar_function(db, "ST_MakeEnvelope", 5, st_makeenvelope_5_cb, det)?;
-
-    // Accessors
-    define_scalar_function(db, "ST_SRID", 1, st_srid_cb, det)?;
-    define_scalar_function(db, "ST_SetSRID", 2, st_setsrid_cb, det)?;
-    define_scalar_function(db, "ST_GeometryType", 1, st_geometrytype_cb, det)?;
-    define_scalar_function(db, "ST_X", 1, st_x_cb, det)?;
-    define_scalar_function(db, "ST_Y", 1, st_y_cb, det)?;
-    define_scalar_function(db, "ST_Z", 1, st_z_cb, det)?;
-    define_scalar_function(db, "ST_IsEmpty", 1, st_isempty_cb, det)?;
-    define_scalar_function(db, "ST_NDims", 1, st_ndims_cb, det)?;
-    define_scalar_function(db, "ST_CoordDim", 1, st_coorddim_cb, det)?;
-    define_scalar_function(db, "ST_Zmflag", 1, st_zmflag_cb, det)?;
-    define_scalar_function(db, "ST_MemSize", 1, st_memsize_cb, det)?;
-    define_scalar_function(db, "ST_IsValid", 1, st_isvalid_cb, det)?;
-    define_scalar_function(db, "ST_IsValidReason", 1, st_isvalidreason_cb, det)?;
-    define_scalar_function(db, "ST_NumPoints", 1, st_numpoints_cb, det)?;
-    define_scalar_function(db, "ST_NPoints", 1, st_npoints_cb, det)?;
-    define_scalar_function(db, "ST_NumGeometries", 1, st_numgeometries_cb, det)?;
-    define_scalar_function(db, "ST_NumInteriorRings", 1, st_numinteriorrings_cb, det)?;
-    define_scalar_function(db, "ST_NumInteriorRing", 1, st_numinteriorrings_cb, det)?;
-    define_scalar_function(db, "ST_NumRings", 1, st_numrings_cb, det)?;
-    define_scalar_function(db, "ST_Dimension", 1, st_dimension_cb, det)?;
-    define_scalar_function(db, "ST_Envelope", 1, st_envelope_cb, det)?;
-    define_scalar_function(db, "ST_PointN", 2, st_pointn_cb, det)?;
-    define_scalar_function(db, "ST_StartPoint", 1, st_startpoint_cb, det)?;
-    define_scalar_function(db, "ST_EndPoint", 1, st_endpoint_cb, det)?;
-    define_scalar_function(db, "ST_ExteriorRing", 1, st_exteriorring_cb, det)?;
-    define_scalar_function(db, "ST_InteriorRingN", 2, st_interiorringn_cb, det)?;
-    define_scalar_function(db, "ST_GeometryN", 2, st_geometryn_cb, det)?;
-    define_scalar_function(db, "ST_XMin", 1, st_xmin_cb, det)?;
-    define_scalar_function(db, "ST_XMax", 1, st_xmax_cb, det)?;
-    define_scalar_function(db, "ST_YMin", 1, st_ymin_cb, det)?;
-    define_scalar_function(db, "ST_YMax", 1, st_ymax_cb, det)?;
-
-    // Measurement
-    define_scalar_function(db, "ST_Area", 1, st_area_cb, det)?;
-    define_scalar_function(db, "ST_Length", 1, st_length_cb, det)?;
-    define_scalar_function(db, "ST_Length2D", 1, st_length2d_cb, det)?;
-    define_scalar_function(db, "ST_Perimeter", 1, st_perimeter_cb, det)?;
-    define_scalar_function(db, "ST_Distance", 2, st_distance_cb, det)?;
-    define_scalar_function(db, "ST_Centroid", 1, st_centroid_cb, det)?;
-    define_scalar_function(db, "ST_PointOnSurface", 1, st_pointonsurface_cb, det)?;
-    define_scalar_function(db, "ST_HausdorffDistance", 2, st_hausdorffdistance_cb, det)?;
-
-    // Geodesic
-    define_scalar_function(db, "ST_DistanceSphere", 2, st_distancesphere_cb, det)?;
-    define_scalar_function(db, "ST_DistanceSpheroid", 2, st_distancespheroid_cb, det)?;
-    define_scalar_function(db, "ST_LengthSphere", 1, st_lengthsphere_cb, det)?;
-    define_scalar_function(db, "ST_Azimuth", 2, st_azimuth_cb, det)?;
-    define_scalar_function(db, "ST_Project", 3, st_project_cb, det)?;
-
-    // Operations
-    define_scalar_function(db, "ST_Union", 2, st_union_cb, det)?;
-    define_scalar_function(db, "ST_Intersection", 2, st_intersection_cb, det)?;
-    define_scalar_function(db, "ST_Difference", 2, st_difference_cb, det)?;
-    define_scalar_function(db, "ST_SymDifference", 2, st_symdifference_cb, det)?;
-    define_scalar_function(db, "ST_Buffer", 2, st_buffer_cb, det)?;
-    define_scalar_function(db, "ST_ClosestPoint", 2, st_closestpoint_cb, det)?;
-
-    // Predicates
-    define_scalar_function(db, "ST_Intersects", 2, st_intersects_cb, det)?;
-    define_scalar_function(db, "ST_Contains", 2, st_contains_cb, det)?;
-    define_scalar_function(db, "ST_Within", 2, st_within_cb, det)?;
-    define_scalar_function(db, "ST_Disjoint", 2, st_disjoint_cb, det)?;
-    define_scalar_function(db, "ST_DWithin", 3, st_dwithin_cb, det)?;
-    define_scalar_function(db, "ST_DWithinSphere", 3, st_dwithinsphere_cb, det)?;
-    define_scalar_function(db, "ST_DWithinSpheroid", 3, st_dwithinspheroid_cb, det)?;
-    define_scalar_function(db, "ST_Covers", 2, st_covers_cb, det)?;
-    define_scalar_function(db, "ST_CoveredBy", 2, st_coveredby_cb, det)?;
-    define_scalar_function(db, "ST_Equals", 2, st_equals_cb, det)?;
-    define_scalar_function(db, "ST_Touches", 2, st_touches_cb, det)?;
-    define_scalar_function(db, "ST_Crosses", 2, st_crosses_cb, det)?;
-    define_scalar_function(db, "ST_Overlaps", 2, st_overlaps_cb, det)?;
-    define_scalar_function(db, "ST_Relate", 2, st_relate_cb, det)?;
-    define_scalar_function(db, "ST_Relate", 3, st_relate_bool_cb, det)?;
-    define_scalar_function(db, "ST_RelateMatch", 2, st_relatematch_cb, det)?;
-
-    // Note: CreateSpatialIndex / DropSpatialIndex are intentionally NOT
-    // registered here. See the comment block above the entry point.
-    let _ = direct;
-
-    Ok(())
-}
