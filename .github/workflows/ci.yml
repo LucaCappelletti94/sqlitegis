@@ -154,7 +154,12 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@wasm-bindgen
+      # Pin to the wasm-bindgen version recorded in Cargo.lock so the CLI
+      # and the .wasm file schema versions match. taiki-e/install-action
+      # defaults to latest, which periodically drifts ahead of our lock.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.121
       - run: cargo test -p sqlitegis --features sqlite --target wasm32-unknown-unknown --test sqlite_wasm
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
@@ -170,7 +175,12 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@wasm-bindgen
+      # Pin to the wasm-bindgen version recorded in Cargo.lock so the CLI
+      # and the .wasm file schema versions match. taiki-e/install-action
+      # defaults to latest, which periodically drifts ahead of our lock.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.121
       - run: cargo test -p sqlitegis --features diesel-sqlite --target wasm32-unknown-unknown --test diesel_wasm_integration
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
