@@ -87,4 +87,57 @@ hooks = [
       types = ["rust"],
       pass_filenames = false,
       stages = ["manual"] },
+
+    # Python-binding gates. Mirror the steps in
+    # .github/workflows/python.yml so local `prek run --all-files`
+    # has the same coverage. uv reads the project from
+    # bindings/python/pyproject.toml and uses its locked venv.
+
+    { id = "uv-sync-python",
+      name = "uv sync --frozen (bindings/python)",
+      entry = "uv sync --frozen --group dev --directory bindings/python",
+      language = "system",
+      types_or = ["python", "toml"],
+      pass_filenames = false },
+
+    { id = "ruff-check",
+      name = "ruff check (bindings/python)",
+      entry = "uv run --directory bindings/python ruff check sqlitegis tests",
+      language = "system",
+      types_or = ["python", "toml"],
+      pass_filenames = false },
+
+    { id = "ruff-format",
+      name = "ruff format --check (bindings/python)",
+      entry = "uv run --directory bindings/python ruff format --check sqlitegis tests",
+      language = "system",
+      types_or = ["python", "toml"],
+      pass_filenames = false },
+
+    { id = "mypy",
+      name = "mypy --strict (bindings/python)",
+      entry = "uv run --directory bindings/python mypy sqlitegis tests",
+      language = "system",
+      types_or = ["python", "toml"],
+      pass_filenames = false },
+
+    { id = "python-build-smoke",
+      name = "python -m build --wheel + twine check (bindings/python)",
+      entry = "bash -c 'cd bindings/python && find dist -mindepth 1 -delete 2>/dev/null; uv run python -m build --wheel && uv run twine check dist/*'",
+      language = "system",
+      types_or = ["python", "toml"],
+      pass_filenames = false },
+
+    # pytest needs the cdylib staged at bindings/python/sqlitegis/_bin/.
+    # Build it first, then run the suite (which enforces 100% coverage
+    # via the addopts in pyproject.toml). Manual-stage because the
+    # cargo build is non-trivial; run with `prek run --stage manual --all-files`.
+
+    { id = "python-pytest",
+      name = "pytest + coverage (bindings/python)",
+      entry = "bash -c 'cargo build --release --no-default-features --features sqlite-extension,bundled-sqlite && mkdir -p bindings/python/sqlitegis/_bin && cp target/release/libsqlitegis.so bindings/python/sqlitegis/_bin/ && uv run --directory bindings/python pytest'",
+      language = "system",
+      types_or = ["python", "rust", "toml"],
+      pass_filenames = false,
+      stages = ["manual"] },
 ]
