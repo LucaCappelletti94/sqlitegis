@@ -53,11 +53,12 @@ Every spatial function the README mentions (`ST_Point`, `ST_AsText`, `ST_DWithin
 
 ## Loadable-extension support
 
-`sqlitegis.register(conn)` calls `conn.enable_load_extension(True)`. This requires that your Python interpreter was built with loadable-extension support.
+`sqlitegis.register(conn)` calls `conn.enable_load_extension(True)`. This requires that your Python interpreter was built with loadable-extension support, and (for `CreateSpatialIndex`) that its bundled SQLite was compiled with the R-tree module.
 
-- Most distribution-managed Pythons (Debian, Ubuntu, Fedora, Homebrew, Alpine, conda-forge) enable extensions by default.
-- `pysqlite3-binary` and `apsw` always support extensions.
-- If `conn.enable_load_extension(True)` raises `AttributeError`, your interpreter was built without extension support. Either switch to a build that has it, or install `pysqlite3-binary` and use `import pysqlite3 as sqlite3` ahead of `sqlitegis.register(conn)`.
+- Most distribution-managed Pythons (Debian, Ubuntu, Fedora, Homebrew, Alpine, conda-forge) enable both by default.
+- `pysqlite3-binary` and `apsw` always support both.
+- On Linux, every supported Python (3.9 onwards) works out of the box.
+- On macOS and Windows, the python.org installer enables loadable extensions and R-tree starting from Python 3.11. Python 3.9 and 3.10 from python.org do not enable them, so `sqlitegis.register` raises `AttributeError` (macOS) or `CreateSpatialIndex` fails on the `CREATE VIRTUAL TABLE ... USING rtree` step (Windows). Switch to Python 3.11+, or `pip install pysqlite3-binary` and `import pysqlite3 as sqlite3` ahead of `sqlitegis.register(conn)`.
 
 ## License
 

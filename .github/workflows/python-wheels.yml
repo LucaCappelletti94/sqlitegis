@@ -53,19 +53,26 @@ jobs:
             platform: musllinux_aarch64
             cibw_build: "cp39-musllinux_aarch64"
             cibw_arch: aarch64
+          # macOS and Windows use cp311 because python.org installers
+          # earlier than 3.11 do not enable loadable-sqlite-extensions
+          # (macOS) and do not enable SQLITE_ENABLE_RTREE (Windows). Our
+          # custom hatch hook still tags the wheel py3-none-<platform>
+          # so pip installs it on any Python 3.9+, but the in-CI test
+          # step needs an interpreter where load_extension and rtree
+          # both work.
           - runner: macos-13
             platform: macosx_x86_64
-            cibw_build: "cp39-macosx_x86_64"
+            cibw_build: "cp311-macosx_x86_64"
             cibw_arch: x86_64
             cargo_target: x86_64-apple-darwin
           - runner: macos-latest
             platform: macosx_arm64
-            cibw_build: "cp39-macosx_arm64"
+            cibw_build: "cp311-macosx_arm64"
             cibw_arch: arm64
             cargo_target: aarch64-apple-darwin
           - runner: windows-latest
             platform: win_amd64
-            cibw_build: "cp39-win_amd64"
+            cibw_build: "cp311-win_amd64"
             cibw_arch: AMD64
             cargo_target: x86_64-pc-windows-msvc
     steps:
@@ -92,10 +99,17 @@ jobs:
           CIBW_BUILD: ${{ matrix.cibw_build }}
           CIBW_ARCHS: ${{ matrix.cibw_arch }}
           # Build a single wheel per platform: tag it as py3-none-<plat> so
-          # the same artifact works for every Python 3.x. The cp39 prefix
+          # the same artifact works for every Python 3.x. The cpXX prefix
           # above is just the cibuildwheel filter that picks one Python to
-          # run inside; we drop the ABI tag below.
+          # run inside; the actual wheel tag is set by hatch_build.py.
           CIBW_BUILD_VERBOSITY: 1
+          # Install libclang in the manylinux/musllinux containers so
+          # bindgen (used by sqlite3ext-sys) can find it. Runs once per
+          # container, not once per wheel. Try yum first (manylinux is
+          # AlmaLinux-based), fall back to apk for musllinux (Alpine).
+          CIBW_BEFORE_ALL_LINUX: >-
+            yum install -y clang clang-devel 2>/dev/null
+            || apk add --no-cache clang clang-dev llvm-dev musl-dev
           # cibuildwheel runs this in the build container before each wheel
           # build. Installs rustup with the right target and produces the
           # cdylib.
