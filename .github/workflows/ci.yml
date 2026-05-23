@@ -32,6 +32,11 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # Required by the bindings/python prek hooks (uv-sync-python,
+      # ruff-check, ruff-format, mypy, python-build-smoke).
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
       - name: Install prek
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/j178/prek/releases/latest/download/prek-installer.sh | sh
       - run: prek run --all-files
