@@ -34,10 +34,17 @@ default = ["diesel-sqlite"]
 sqlite = ["dep:libsqlite3-sys", "dep:sqlite-wasm-rs"]
 
 # Adds the `#[no_mangle]` C entry point `sqlite3_sqlitegis_init` so the
-# cdylib build is loadable via SQLite's `load_extension`. Keep this OFF
-# when consuming as a regular Rust dependency to avoid leaking the symbol
-# out of dependent binaries.
-sqlite-extension = ["sqlite"]
+# cdylib build is loadable via SQLite's `load_extension`. Routes every
+# SQLite call through the host's `sqlite3_api_routines` table (via the
+# `sqlite-loadable` crate), so the produced cdylib has no link-time
+# dependency on a specific libsqlite3 and works against whichever
+# libsqlite3 the host (Python, the SQLite CLI, etc.) has loaded.
+#
+# Independent from `sqlite`: enabling `sqlite-extension` alone produces a
+# portable cdylib without pulling in the direct-libsqlite3-sys call path.
+# Enable both when the same binary needs to do in-process registration
+# (via `register_functions`) AND export the C entry point.
+sqlite-extension = ["dep:sqlite-loadable"]
 
 # Backend-agnostic Diesel types and expression methods. Enable
 # `diesel-sqlite` or `diesel-postgres` to get backend-specific impls.
@@ -54,6 +61,11 @@ diesel-postgres = ["diesel", "diesel/postgres"]
 # a no-op.
 bundled-sqlite = ["libsqlite3-sys?/bundled"]
 
+# Opt-in flag for the SpatiaLite comparison benchmark. Off by default so
+# the CI matrix does not need SpatiaLite installed. See the [[bench]]
+# entry at the bottom of this file for run instructions.
+bench-spatialite = []
+
 [dependencies]
 geo = { workspace = true }
 geozero = { version = "0.15", features = ["with-wkt", "with-geojson", "with-svg", "with-geo", "with-wkb"] }
@@ -63,6 +75,15 @@ diesel = { version = "2", default-features = false, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 libsqlite3-sys = { workspace = true, features = ["bundled_bindings"], optional = true }
+# Loadable-extension entry point and `sqlite3_api_routines`-routed bindings.
+# Gated on the `sqlite-extension` feature so it is only pulled in when the
+# user actually wants to build the cdylib for `load_extension`. Native-only
+# because its bundled SQLite C source (via sqlite3ext-sys) #include's
+# <stdio.h>, which has no implementation on wasm32-unknown-unknown.
+# Loadable extensions also require dlopen, which wasm does not have. The
+# `src/sqlite/loadable` module is gated on the same cfg so this dep being
+# absent on wasm is harmless.
+sqlite-loadable = { version = "0.0.6-alpha.6", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 sqlite-wasm-rs = { version = "0.5", optional = true }
@@ -120,6 +141,19 @@ name = "spatial_index"
 path = "benches/spatial_index.rs"
 harness = false
 required-features = ["diesel-sqlite"]
+
+# Comparison benchmark vs SpatiaLite. Requires:
+#   1. `libsqlite3-mod-spatialite` installed system-wide (apt / brew /
+#      conda-forge) so SQLite can `load_extension('mod_spatialite')`.
+#   2. The sqlitegis cdylib already built at `target/release/libsqlitegis.so`
+#      via `cargo build --release --features sqlite-extension,bundled-sqlite`.
+# Run with:
+#   cargo bench --features bench-spatialite spatialite_vs_sqlitegis
+[[bench]]
+name = "spatialite_vs_sqlitegis"
+path = "benches/spatialite_vs_sqlitegis.rs"
+harness = false
+required-features = ["bench-spatialite"]
 
 # Single-package workspace. The package above is the only member;
 # workspace.package and workspace.dependencies stay here so future

@@ -5,7 +5,7 @@
 //! ST_Covers, ST_CoveredBy, ST_Equals, ST_Touches, ST_Crosses,
 //! ST_Overlaps, ST_Relate, ST_RelateMatch
 
-use geo::algorithm::{Contains, Intersects, Relate};
+use geo::algorithm::{BoundingRect, Contains, Intersects, Relate};
 use geo::coordinate_position::CoordPos;
 use geo::dimensions::Dimensions;
 
@@ -30,6 +30,14 @@ use crate::core::ewkb::parse_ewkb_pair;
 /// ```
 pub fn st_intersects(a: &[u8], b: &[u8]) -> Result<bool> {
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+    // Bounding-box quick reject. For the common "many points vs one window"
+    // workload, nearly every row is negative; a 4-float MBR comparison is
+    // orders of magnitude cheaper than the full point-in-polygon test.
+    if let (Some(ra), Some(rb)) = (ga.bounding_rect(), gb.bounding_rect()) {
+        if !ra.intersects(&rb) {
+            return Ok(false);
+        }
+    }
     Ok(ga.intersects(&gb))
 }
 

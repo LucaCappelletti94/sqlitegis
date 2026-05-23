@@ -1,0 +1,32 @@
+# Codecov configuration for sqlitegis.
+#
+# `src/sqlite/loadable/` implements the loadable-extension cdylib entry
+# point built on `sqlite-loadable`. Its callbacks are exercised by the
+# Python wheel test suite (`bindings/python/tests/`, run on every PR via
+# `.github/workflows/python.yml`) which loads the produced cdylib through
+# SQLite's `load_extension` API. We deliberately do not run a parallel
+# Rust-side runtime-load test because `sqlite-loadable`'s bundled SQLite
+# (via `sqlite3ext-sys`) collides at link time with `libsqlite3-sys`
+# when both end up in the same test binary; the Python wheel CI is the
+# integration test for that path instead.
+#
+# Excluding the module from cargo-llvm-cov measurement keeps the Rust
+# coverage report honest (it shouldn't claim those lines are uncovered
+# when they are intentionally tested through a different harness).
+
+ignore:
+  - "src/sqlite/loadable/**"
+
+coverage:
+  status:
+    project:
+      default:
+        # Tolerate small drops; the workspace is mostly stable code with
+        # the occasional non-coverable FFI shim.
+        threshold: 1%
+    patch:
+      default:
+        # Patches must keep at least 80% of their newly-introduced lines
+        # covered. The remaining 20% absorbs unreachable error paths,
+        # debug helpers, and similar.
+        target: 80%
