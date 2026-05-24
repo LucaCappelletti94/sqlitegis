@@ -1,0 +1,32 @@
+[package]
+name = "sqlitegis-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+sqlitegis = { path = "..", default-features = false }
+geo = { version = "0.33", default-features = false }
+
+# Prevent this crate from being picked up by the parent workspace.
+[workspace]
+members = []
+
+[[bin]]
+name = "fuzz_union_disjoint"
+path = "fuzz_targets/fuzz_union_disjoint.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_sym_difference_disjoint"
+path = "fuzz_targets/fuzz_sym_difference_disjoint.rs"
+test = false
+doc = false
+bench = false

@@ -14,7 +14,9 @@ use geo::{
 };
 
 use crate::core::error::{Result, SqliteGisError};
-use crate::core::ewkb::{extract_mbr, extract_srid, parse_ewkb, parse_ewkb_pair, write_ewkb};
+use crate::core::ewkb::{
+    concat_multipolygon_bodies, extract_mbr, extract_srid, parse_ewkb, parse_ewkb_pair, write_ewkb,
+};
 use crate::core::functions::emptiness::{is_empty_geometry, is_empty_point};
 
 /// Extract a Polygon or MultiPolygon from a geometry, converting single
@@ -302,17 +304,12 @@ fn pack(bag: GeometryBag) -> Geometry<f64> {
 /// ```
 pub fn st_union(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
     // MBR-only fastpath. If both bboxes exist and are disjoint, the
-    // union is simply the concatenation of both polygon lists. We still
-    // decode both blobs (to validate them and to produce the result
-    // geometry) but skip the heavy BooleanOps sweep entirely.
+    // union is simply the concatenation of both polygon lists. We splice
+    // the input EWKB bytes directly without decoding, which is several
+    // times faster than the decode + Vec + serialize path.
     if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
         if !ra.intersects(&rb) {
-            let (ga, gb, srid) = parse_ewkb_pair(a, b)?;
-            let ma = require_multi_polygon(ga)?;
-            let mb = require_multi_polygon(gb)?;
-            let mut combined = ma.0;
-            combined.extend(mb.0);
-            return write_ewkb(&Geometry::MultiPolygon(MultiPolygon::new(combined)), srid);
+            return concat_multipolygon_bodies(a, b);
         }
     }
     binary_polygon_op(a, b, |ma, mb| ma.union(mb))
@@ -413,15 +410,10 @@ pub fn st_difference(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
 pub fn st_sym_difference(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
     // MBR-only fastpath. Symmetric difference of disjoint geometries is
     // their union (XOR of non-overlapping sets is the full pair). Same
-    // shortcut shape as `st_union`.
+    // bytes-only splice as `st_union`.
     if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
         if !ra.intersects(&rb) {
-            let (ga, gb, srid) = parse_ewkb_pair(a, b)?;
-            let ma = require_multi_polygon(ga)?;
-            let mb = require_multi_polygon(gb)?;
-            let mut combined = ma.0;
-            combined.extend(mb.0);
-            return write_ewkb(&Geometry::MultiPolygon(MultiPolygon::new(combined)), srid);
+            return concat_multipolygon_bodies(a, b);
         }
     }
     binary_polygon_op(a, b, |ma, mb| ma.xor(mb))
