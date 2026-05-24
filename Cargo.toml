@@ -145,6 +145,9 @@ required-features = ["bench-spatialite", "sqlite", "bundled-sqlite"]
 # detached workspace today) can inherit them when added.
 [workspace]
 resolver = "2"
+# Keep the fuzz/ subcrate out of the main workspace so its nightly-only
+# cargo-fuzz deps do not leak into `cargo build`/`cargo test --workspace`.
+exclude = ["fuzz"]
 
 [workspace.package]
 rust-version = "1.88"
