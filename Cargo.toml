@@ -78,6 +78,7 @@ chrono = "0.4"
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["plotters", "cargo_bench_support"] }
 libsqlite3-sys = { workspace = true, features = ["bundled_bindings"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 

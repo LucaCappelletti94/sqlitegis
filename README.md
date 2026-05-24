@@ -34,6 +34,28 @@ let nearby = features::table
 
 `CreateSpatialIndex` and `DropSpatialIndex` are DDL helpers without typed wrappers, called through `diesel::sql_query`. [R-tree](https://en.wikipedia.org/wiki/R-tree)-backed queries run 50 to 60x faster than the non-indexed equivalents (see Benchmarks).
 
+## Using with sqlx
+
+If you use [`sqlx`](https://github.com/launchbadge/sqlx) instead of Diesel, register the auto-extension once and every sqlx-opened connection picks up the spatial functions.
+
+```rust
+# tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+use sqlx::sqlite::SqlitePoolOptions;
+
+// Same one-time registration as the Diesel example: installs the spatial
+// functions on every SqliteConnection libsqlite3 opens in this process.
+sqlitegis::sqlite::register_on_every_new_connection();
+
+let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+
+let (wkt,): (String,) = sqlx::query_as("SELECT ST_AsText(ST_Buffer(ST_Point(0, 0), 1.0))")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+# assert!(wkt.starts_with("POLYGON"), "got {wkt}");
+# });
+```
+
 ## Without Diesel: pure-Rust geometry
 
 If you only need the geometry algebra without SQL, the core functions are callable from regular Rust without any database at all.
