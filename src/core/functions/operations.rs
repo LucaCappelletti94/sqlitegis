@@ -14,7 +14,7 @@ use geo::{
 };
 
 use crate::core::error::{Result, SqliteGisError};
-use crate::core::ewkb::{parse_ewkb, parse_ewkb_pair, write_ewkb};
+use crate::core::ewkb::{extract_mbr, extract_srid, parse_ewkb, parse_ewkb_pair, write_ewkb};
 use crate::core::functions::emptiness::{is_empty_geometry, is_empty_point};
 
 /// Extract a Polygon or MultiPolygon from a geometry, converting single
@@ -349,6 +349,12 @@ pub fn st_union(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
 /// assert_eq!(as_text(&r).unwrap(), "POINT(1 1)");
 /// ```
 pub fn st_intersection(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if !ra.intersects(&rb) {
+            let empty = Geometry::GeometryCollection(GeometryCollection::new_from(vec![]));
+            return write_ewkb(&empty, extract_srid(a));
+        }
+    }
     let (ga, gb, srid) = parse_ewkb_pair(a, b)?;
     let mut bag_a = GeometryBag::new();
     let mut bag_b = GeometryBag::new();
@@ -762,6 +768,15 @@ mod tests {
         let empty_mpoly = geom_from_text("MULTIPOLYGON EMPTY", None).unwrap();
         let r3 = st_intersection(&empty_mpoly, &poly).unwrap();
         assert!(st_is_empty(&r3).unwrap());
+    }
+
+    #[test]
+    fn intersection_mbr_disjoint_returns_empty_geometrycollection() {
+        let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", None).unwrap();
+        let r = st_intersection(&a, &b).unwrap();
+        assert_eq!(st_geometry_type(&r).unwrap(), "ST_GeometryCollection");
+        assert!(st_is_empty(&r).unwrap());
     }
 
     #[test]
