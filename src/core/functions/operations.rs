@@ -301,6 +301,20 @@ fn pack(bag: GeometryBag) -> Geometry<f64> {
 /// assert!((st_area(&u).unwrap() - 6.0).abs() < 1e-10);
 /// ```
 pub fn st_union(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
+    // MBR-only fastpath. If both bboxes exist and are disjoint, the
+    // union is simply the concatenation of both polygon lists. We still
+    // decode both blobs (to validate them and to produce the result
+    // geometry) but skip the heavy BooleanOps sweep entirely.
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if !ra.intersects(&rb) {
+            let (ga, gb, srid) = parse_ewkb_pair(a, b)?;
+            let ma = require_multi_polygon(ga)?;
+            let mb = require_multi_polygon(gb)?;
+            let mut combined = ma.0;
+            combined.extend(mb.0);
+            return write_ewkb(&Geometry::MultiPolygon(MultiPolygon::new(combined)), srid);
+        }
+    }
     binary_polygon_op(a, b, |ma, mb| ma.union(mb))
 }
 
@@ -397,6 +411,19 @@ pub fn st_difference(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
 /// assert!((st_area(&sd).unwrap() - 4.0).abs() < 1e-10);
 /// ```
 pub fn st_sym_difference(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
+    // MBR-only fastpath. Symmetric difference of disjoint geometries is
+    // their union (XOR of non-overlapping sets is the full pair). Same
+    // shortcut shape as `st_union`.
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if !ra.intersects(&rb) {
+            let (ga, gb, srid) = parse_ewkb_pair(a, b)?;
+            let ma = require_multi_polygon(ga)?;
+            let mb = require_multi_polygon(gb)?;
+            let mut combined = ma.0;
+            combined.extend(mb.0);
+            return write_ewkb(&Geometry::MultiPolygon(MultiPolygon::new(combined)), srid);
+        }
+    }
     binary_polygon_op(a, b, |ma, mb| ma.xor(mb))
 }
 
@@ -768,6 +795,25 @@ mod tests {
         let empty_mpoly = geom_from_text("MULTIPOLYGON EMPTY", None).unwrap();
         let r3 = st_intersection(&empty_mpoly, &poly).unwrap();
         assert!(st_is_empty(&r3).unwrap());
+    }
+
+    #[test]
+    fn sym_difference_disjoint_concatenates_polygons() {
+        let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", None).unwrap();
+        let sd = st_sym_difference(&a, &b).unwrap();
+        assert!((st_area(&sd).unwrap() - 2.0).abs() < 1e-10);
+        assert_eq!(st_geometry_type(&sd).unwrap(), "ST_MultiPolygon");
+    }
+
+    #[test]
+    fn union_disjoint_concatenates_polygons() {
+        let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", None).unwrap();
+        let u = st_union(&a, &b).unwrap();
+        // Two unit squares: total area 2.0.
+        assert!((st_area(&u).unwrap() - 2.0).abs() < 1e-10);
+        assert_eq!(st_geometry_type(&u).unwrap(), "ST_MultiPolygon");
     }
 
     #[test]

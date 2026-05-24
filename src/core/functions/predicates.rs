@@ -61,6 +61,16 @@ pub fn st_intersects(a: &[u8], b: &[u8]) -> Result<bool> {
 /// assert!(!st_contains(&poly, &outside).unwrap());
 /// ```
 pub fn st_contains(a: &[u8], b: &[u8]) -> Result<bool> {
+    // MBR-only fastpath. If A's bbox does not fully contain B's bbox,
+    // A cannot contain B. Walks the EWKB bytes for just the bbox and
+    // short-circuits the full decode + contains test for the common
+    // "filter many points against one window" workload where most rows
+    // fall outside the LHS bbox.
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if !ra.contains(&rb) {
+            return Ok(false);
+        }
+    }
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
     Ok(ga.contains(&gb))
 }
@@ -206,6 +216,15 @@ pub fn st_dwithin_spheroid(a: &[u8], b: &[u8], distance: f64) -> Result<bool> {
 /// assert!(!st_covers(&poly, &outside).unwrap());
 /// ```
 pub fn st_covers(a: &[u8], b: &[u8]) -> Result<bool> {
+    // MBR-only fastpath. If A's bbox does not fully contain B's bbox,
+    // A cannot cover B. Same shortcut as `st_contains`; covers is a
+    // slightly more permissive variant of contains so the necessary
+    // condition is identical. `st_covered_by` inherits via delegation.
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if !ra.contains(&rb) {
+            return Ok(false);
+        }
+    }
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
     Ok(ga.relate(&gb).is_covers())
 }
@@ -246,6 +265,16 @@ pub fn st_covered_by(a: &[u8], b: &[u8]) -> Result<bool> {
 /// assert!(!st_equals(&a, &c).unwrap());
 /// ```
 pub fn st_equals(a: &[u8], b: &[u8]) -> Result<bool> {
+    // MBR-only fastpath. MBR equality is a necessary (but not
+    // sufficient) condition for geometric equality. Different bboxes
+    // imply different point sets, so we can short-circuit to false.
+    // Stronger than the disjoint-MBR check used in `st_intersects`:
+    // even bboxes that overlap but differ in any corner fire this.
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if ra.min() != rb.min() || ra.max() != rb.max() {
+            return Ok(false);
+        }
+    }
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
     Ok(ga.relate(&gb).is_equal_topo())
 }
@@ -267,6 +296,14 @@ pub fn st_equals(a: &[u8], b: &[u8]) -> Result<bool> {
 /// assert!(!st_touches(&a, &far).unwrap());
 /// ```
 pub fn st_touches(a: &[u8], b: &[u8]) -> Result<bool> {
+    // MBR-only fastpath. MBR-disjoint geometries cannot touch (touching
+    // requires at least one shared boundary point). Same shortcut shape
+    // as `st_intersects`.
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if !ra.intersects(&rb) {
+            return Ok(false);
+        }
+    }
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
     // geo 0.32: is_touches() takes 0 arguments
     Ok(ga.relate(&gb).is_touches())
@@ -310,6 +347,13 @@ pub fn st_crosses(a: &[u8], b: &[u8]) -> Result<bool> {
 /// assert!(!st_overlaps(&a, &far).unwrap());
 /// ```
 pub fn st_overlaps(a: &[u8], b: &[u8]) -> Result<bool> {
+    // MBR-only fastpath. MBR-disjoint geometries cannot overlap
+    // (overlapping requires shared interior points).
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if !ra.intersects(&rb) {
+            return Ok(false);
+        }
+    }
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
     Ok(ga.relate(&gb).is_overlaps())
 }
@@ -505,6 +549,66 @@ mod tests {
             st_disjoint(&a, &b).unwrap(),
             !st_intersects(&a, &b).unwrap()
         );
+    }
+
+    #[test]
+    fn contains_mbr_not_containing_returns_false() {
+        // A's bbox (0..2 in both axes) does not fully cover B's bbox (4..6).
+        // The MBR fastpath must short-circuit to false without decoding.
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((4 4,6 4,6 6,4 6,4 4))", None).unwrap();
+        assert!(!st_contains(&a, &b).unwrap());
+        // Symmetric: ST_Within delegates to st_contains so inherits the fastpath.
+        assert!(!st_within(&b, &a).unwrap());
+    }
+
+    #[test]
+    fn equals_different_mbrs_returns_false() {
+        // Different bboxes, so the geometries cannot be equal even though
+        // they overlap in interior. Fastpath should short-circuit.
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((0 0,3 0,3 3,0 3,0 0))", None).unwrap();
+        assert!(!st_equals(&a, &b).unwrap());
+    }
+
+    #[test]
+    fn equals_same_mbr_different_geometry_still_correctly_false() {
+        // Same bbox (both 0..2 x 0..2) but different shapes. Fastpath
+        // does NOT fire here; must fall through to full topo equality.
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((0 0,2 0,2 2,0 0))", None).unwrap();
+        assert!(!st_equals(&a, &b).unwrap());
+    }
+
+    #[test]
+    fn overlaps_mbr_disjoint_returns_false() {
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let far = geom_from_text("POLYGON((10 10,12 10,12 12,10 12,10 10))", None).unwrap();
+        assert!(!st_overlaps(&a, &far).unwrap());
+    }
+
+    #[test]
+    fn touches_mbr_disjoint_returns_false() {
+        let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        let far = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", None).unwrap();
+        assert!(!st_touches(&a, &far).unwrap());
+    }
+
+    #[test]
+    fn covers_mbr_not_containing_returns_false() {
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((4 4,6 4,6 6,4 6,4 4))", None).unwrap();
+        assert!(!st_covers(&a, &b).unwrap());
+        assert!(!st_covered_by(&b, &a).unwrap());
+    }
+
+    #[test]
+    fn contains_overlapping_mbrs_but_b_extends_outside_returns_false() {
+        // MBRs overlap but B's right edge extends past A's right edge.
+        // Fastpath should fire here too because A.contains(B.mbr) is false.
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((1 1,3 1,3 3,1 3,1 1))", None).unwrap();
+        assert!(!st_contains(&a, &b).unwrap());
     }
 
     #[test]

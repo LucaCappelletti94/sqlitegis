@@ -123,9 +123,12 @@ enum Kind {
     Spatialite,
 }
 
-/// Seed N random WGS84 points into a `places(id, geom)` table. SpatiaLite
-/// needs its geometry column declared via `AddGeometryColumn`; sqlitegis
-/// is fine with a plain BLOB column.
+/// Seed N random WGS84 points into a `places(id, geom)` table and N small
+/// axis-aligned polygons (0.1 deg squares centred on independently-drawn
+/// coordinates) into a `regions(id, geom)` table. SpatiaLite needs its
+/// geometry columns declared via `AddGeometryColumn`; sqlitegis is fine
+/// with plain BLOB columns. Both DBs see identical bytes because the RNG
+/// sequence is deterministic and reset to `RNG_SEED` at the top.
 unsafe fn seed(db: *mut sqlite3, kind: Kind) {
     unsafe {
         match kind {
@@ -134,6 +137,10 @@ unsafe fn seed(db: *mut sqlite3, kind: Kind) {
                     db,
                     "CREATE TABLE places (id INTEGER PRIMARY KEY, geom BLOB)",
                 );
+                exec(
+                    db,
+                    "CREATE TABLE regions (id INTEGER PRIMARY KEY, geom BLOB)",
+                );
             }
             Kind::Spatialite => {
                 exec(db, "CREATE TABLE places (id INTEGER PRIMARY KEY)");
@@ -141,10 +148,17 @@ unsafe fn seed(db: *mut sqlite3, kind: Kind) {
                     db,
                     "SELECT AddGeometryColumn('places', 'geom', 4326, 'POINT', 'XY')",
                 );
+                exec(db, "CREATE TABLE regions (id INTEGER PRIMARY KEY)");
+                exec(
+                    db,
+                    "SELECT AddGeometryColumn('regions', 'geom', 4326, 'POLYGON', 'XY')",
+                );
             }
         }
         let mut state: u64 = RNG_SEED;
         exec(db, "BEGIN");
+
+        // Points into `places`.
         let insert_sql =
             CString::new("INSERT INTO places(geom) VALUES (ST_GeomFromText(?, 4326))").unwrap();
         let mut stmt = ptr::null_mut();
@@ -162,6 +176,35 @@ unsafe fn seed(db: *mut sqlite3, kind: Kind) {
             sqlite3_reset(stmt);
         }
         sqlite3_finalize(stmt);
+
+        // Polygons into `regions`: 0.1 deg axis-aligned squares centred on
+        // continuation of the same RNG stream.
+        let insert_poly_sql =
+            CString::new("INSERT INTO regions(geom) VALUES (ST_GeomFromText(?, 4326))").unwrap();
+        let mut pstmt = ptr::null_mut();
+        assert_eq!(
+            sqlite3_prepare_v2(
+                db,
+                insert_poly_sql.as_ptr(),
+                -1,
+                &mut pstmt,
+                ptr::null_mut()
+            ),
+            SQLITE_OK,
+        );
+        const HALF: f64 = 0.05;
+        for _ in 0..N_POINTS {
+            let (cx, cy) = next_xy(&mut state);
+            let (x0, y0, x1, y1) = (cx - HALF, cy - HALF, cx + HALF, cy + HALF);
+            let wkt = format!("POLYGON(({x0} {y0},{x1} {y0},{x1} {y1},{x0} {y1},{x0} {y0}))");
+            let cwkt = CString::new(wkt).unwrap();
+            sqlite3_bind_text(pstmt, 1, cwkt.as_ptr(), -1, SQLITE_TRANSIENT());
+            let step = sqlite3_step(pstmt);
+            assert_eq!(step, SQLITE_DONE, "regions INSERT step rc {step}");
+            sqlite3_reset(pstmt);
+        }
+        sqlite3_finalize(pstmt);
+
         exec(db, "COMMIT");
     }
 }
@@ -344,6 +387,342 @@ fn bench_buffer_intersection(c: &mut Criterion) {
     }
 }
 
+/// `ST_Contains` on a large constant LHS polygon against every point in
+/// `places`. The window is wide enough that ~1% of points fall inside,
+/// so the negative-row path is the hot path. Validates whether an MBR
+/// fastpath on `ST_Contains` would yield the same kind of speedup we
+/// got for `ST_Intersects`.
+fn bench_bulk_contains_unindexed(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql = "SELECT COUNT(*) FROM places \
+               WHERE ST_Contains(ST_GeomFromText('POLYGON((0 0, 36 0, 36 18, 0 18, 0 0))', 4326), geom)";
+
+    let mut group = c.benchmark_group("Unindexed ST_Contains bulk");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// Indexed variant of the Contains bench. Uses the R-tree to prefilter
+/// the candidate rows before evaluating `ST_Contains` per row. Mirrors
+/// the existing indexed Intersects bench but with Contains semantics.
+fn bench_indexed_contains(c: &mut Criterion) {
+    let db_g = unsafe {
+        let db = open_sqlitegis_db();
+        exec(db, "SELECT CreateSpatialIndex('places', 'geom')");
+        db
+    };
+    let db_s = unsafe {
+        let db = open_spatialite_db();
+        exec(db, "SELECT CreateSpatialIndex('places', 'geom')");
+        db
+    };
+    let sql_g = "SELECT COUNT(*) FROM places p \
+                 JOIN places_geom_rtree r ON p.rowid = r.id \
+                 WHERE r.xmin >= 0 AND r.xmax <= 36 AND r.ymin >= 0 AND r.ymax <= 18 \
+                 AND ST_Contains(ST_GeomFromText('POLYGON((0 0, 36 0, 36 18, 0 18, 0 0))', 4326), p.geom)";
+    let sql_s = "SELECT COUNT(*) FROM places p \
+                 JOIN idx_places_geom r ON p.rowid = r.pkid \
+                 WHERE r.xmin >= 0 AND r.xmax <= 36 AND r.ymin >= 0 AND r.ymax <= 18 \
+                 AND ST_Contains(ST_GeomFromText('POLYGON((0 0, 36 0, 36 18, 0 18, 0 0))', 4326), p.geom)";
+
+    let mut group = c.benchmark_group("Indexed ST_Contains window");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql_g)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql_s)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// Isolated `ST_Buffer` throughput on point inputs. The buffer distance
+/// is constant; the input geometry varies per row. We consume the result
+/// via `SUM(ST_Area(...))` so SQLite does not skip the call. This isolates
+/// the per-row buffer cost from the surrounding intersection logic that
+/// the existing `ST_Buffer + ST_Intersection` bench fuses together.
+fn bench_buffer_throughput(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql = "SELECT SUM(ST_Area(ST_Buffer(geom, 0.01))) FROM places";
+
+    let mut group = c.benchmark_group("ST_Buffer scalar throughput");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_Centroid` scalar throughput on polygon inputs. Pure unary work
+/// per row, no MBR shortcut possible. Measures the per-callback overhead
+/// (EWKB decode + centroid algo + EWKB write) on a representative
+/// polygon workload.
+fn bench_centroid_throughput(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql = "SELECT COUNT(ST_Centroid(geom)) FROM regions";
+
+    let mut group = c.benchmark_group("ST_Centroid scalar throughput");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_Difference` against a constant far-away polygon: the LHS region
+/// and the RHS window are always MBR-disjoint, so the geometrically
+/// correct answer is "LHS unchanged" for every row. This isolates the
+/// disjoint-MBR fastpath opportunity for set operations (sqlitegis does
+/// not have one today; SpatiaLite/GEOS may or may not short-circuit).
+fn bench_difference_disjoint(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql = "SELECT COUNT(*) FROM regions \
+               WHERE NOT ST_IsEmpty(ST_Difference( \
+                   geom, \
+                   ST_GeomFromText('POLYGON((-179.9 -89.9, -179 -89.9, -179 -89, -179.9 -89, -179.9 -89.9))', 4326) \
+               ))";
+
+    let mut group = c.benchmark_group("ST_Difference disjoint bulk");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_Covers` follows the same MBR-containment short-circuit as
+/// `ST_Contains` (covers is a slightly more permissive variant). Same
+/// constant LHS polygon vs every point.
+fn bench_bulk_covers_unindexed(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql = "SELECT COUNT(*) FROM places \
+               WHERE ST_Covers(ST_GeomFromText('POLYGON((0 0, 36 0, 36 18, 0 18, 0 0))', 4326), geom)";
+
+    let mut group = c.benchmark_group("Unindexed ST_Covers bulk");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_Touches` against a constant polygon. Random regions almost never
+/// touch the LHS exactly, so the predicate fires false on essentially
+/// every row. Tests the MBR-disjoint short-circuit opportunity.
+fn bench_bulk_touches_unindexed(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql = "SELECT COUNT(*) FROM regions \
+               WHERE ST_Touches(geom, ST_GeomFromText('POLYGON((10 20, 11 20, 11 21, 10 21, 10 20))', 4326))";
+
+    let mut group = c.benchmark_group("Unindexed ST_Touches bulk");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_Overlaps`: same-dimension geometries with partial overlap. Random
+/// regions vs a constant polygon; nearly all rows are MBR-disjoint so the
+/// predicate fires false. Tests the MBR-disjoint short-circuit.
+fn bench_bulk_overlaps_unindexed(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql = "SELECT COUNT(*) FROM regions \
+               WHERE ST_Overlaps(geom, ST_GeomFromText('POLYGON((10 20, 11 20, 11 21, 10 21, 10 20))', 4326))";
+
+    let mut group = c.benchmark_group("Unindexed ST_Overlaps bulk");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_Equals` vs a constant polygon. All rows return false because the
+/// random regions never coincide exactly. Tests the MBR-disjoint short
+/// circuit (and incidentally the MBR-not-equal optimisation if we add
+/// the tighter "MBRs differ implies not equal" check later).
+fn bench_bulk_equals_unindexed(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql = "SELECT COUNT(*) FROM regions \
+               WHERE ST_Equals(geom, ST_GeomFromText('POLYGON((10 20, 11 20, 11 21, 10 21, 10 20))', 4326))";
+
+    let mut group = c.benchmark_group("Unindexed ST_Equals bulk");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_DWithin` (planar Euclidean): count points within 5 degrees of a
+/// fixed point. ~1% of the globe falls inside; most rows reject. Tests
+/// the MBR-distance lower-bound short-circuit opportunity (compute
+/// MBR-to-MBR distance; if greater than threshold, fail without full
+/// distance call). SpatiaLite 5.x has no native `ST_DWithin`, so the
+/// SpatiaLite query is rewritten as `ST_Distance(...) <= threshold`,
+/// which is the canonical equivalent in SpatiaLite SQL.
+fn bench_bulk_dwithin_unindexed(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql_g = "SELECT COUNT(*) FROM places \
+                 WHERE ST_DWithin(geom, ST_GeomFromText('POINT(0 0)', 4326), 5.0)";
+    let sql_s = "SELECT COUNT(*) FROM places \
+                 WHERE ST_Distance(geom, ST_GeomFromText('POINT(0 0)', 4326)) <= 5.0";
+
+    let mut group = c.benchmark_group("Unindexed ST_DWithin bulk");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql_g)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql_s)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_Union` against a constant far-away polygon. Every row is MBR
+/// disjoint so the correct result is "both inputs as a collection".
+/// Tests the disjoint-MBR fastpath opportunity for binary set ops.
+fn bench_union_disjoint(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql = "SELECT COUNT(*) FROM regions \
+               WHERE NOT ST_IsEmpty(ST_Union( \
+                   geom, \
+                   ST_GeomFromText('POLYGON((-179.9 -89.9, -179 -89.9, -179 -89, -179.9 -89, -179.9 -89.9))', 4326) \
+               ))";
+
+    let mut group = c.benchmark_group("ST_Union disjoint bulk");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_SymDifference` against a constant far-away polygon. MBR disjoint
+/// so the correct result is both inputs as a collection (symmetric
+/// difference of disjoint sets is their union). Same fastpath shape as
+/// Union and Difference.
+fn bench_sym_difference_disjoint(c: &mut Criterion) {
+    let db_g = unsafe { open_sqlitegis_db() };
+    let db_s = unsafe { open_spatialite_db() };
+    let sql = "SELECT COUNT(*) FROM regions \
+               WHERE NOT ST_IsEmpty(ST_SymDifference( \
+                   geom, \
+                   ST_GeomFromText('POLYGON((-179.9 -89.9, -179 -89.9, -179 -89, -179.9 -89, -179.9 -89.9))', 4326) \
+               ))";
+
+    let mut group = c.benchmark_group("ST_SymDifference disjoint bulk");
+    group.throughput(Throughput::Elements(N_POINTS as u64));
+    group.bench_function(BenchmarkId::new("sqlitegis", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", N_POINTS), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
 criterion_group!(
     benches,
     bench_bulk_intersects_unindexed,
@@ -351,5 +730,17 @@ criterion_group!(
     bench_distance_sphere,
     bench_astext_throughput,
     bench_buffer_intersection,
+    bench_bulk_contains_unindexed,
+    bench_indexed_contains,
+    bench_buffer_throughput,
+    bench_centroid_throughput,
+    bench_difference_disjoint,
+    bench_bulk_covers_unindexed,
+    bench_bulk_touches_unindexed,
+    bench_bulk_overlaps_unindexed,
+    bench_bulk_equals_unindexed,
+    bench_bulk_dwithin_unindexed,
+    bench_union_disjoint,
+    bench_sym_difference_disjoint,
 );
 criterion_main!(benches);
