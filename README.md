@@ -67,7 +67,7 @@ Geodesic functions (`ST_DistanceSphere`, `ST_DistanceSpheroid`, `ST_LengthSphere
 
 ## Benchmarks
 
-See [BENCHMARKS.md](BENCHMARKS.md) for the full R-tree and SpatiaLite comparison reports. Headline: on a 50k-row dataset, sqlitegis wins 12 of 17 head-to-head workloads against SpatiaLite, with the geodesic distance bench 8.45x faster and the binary predicates 1.2x to 1.7x faster thanks to an MBR-only fastpath. SpatiaLite still wins on `ST_Union` and `ST_SymDifference` (2.5x).
+See [BENCHMARKS.md](https://github.com/LucaCappelletti94/sqlitegis/blob/main/BENCHMARKS.md) for the full R-tree and SpatiaLite comparison reports. Headline: on a 50k-row dataset, sqlitegis wins 12 of 17 head-to-head workloads against SpatiaLite, with the geodesic distance bench 8.45x faster and the binary predicates 1.2x to 1.7x faster thanks to an MBR-only fastpath. SpatiaLite still wins on `ST_Union` and `ST_SymDifference` (2.5x).
 
 ## Contributing
 
