@@ -42,14 +42,16 @@ SpatiaLite would have been the obvious choice except for two practical issues. I
 | `ST_Centroid` scalar throughput | `56.10 ms` | `38.16 ms` | `SpatiaLite 1.47x` |
 | `ST_Buffer` + `ST_Intersection` bulk | `36.85 ms` | `28.54 ms` | `SpatiaLite 1.29x` |
 | `ST_Difference` disjoint bulk | `254.51 ms` | `224.24 ms` | `SpatiaLite 1.10x` |
-| `ST_Union` disjoint bulk | `226.19 ms` | `86.10 ms` | `SpatiaLite 2.63x` |
-| `ST_SymDifference` disjoint bulk | `224.51 ms` | `89.68 ms` | `SpatiaLite 2.51x` |
+| `ST_Union` disjoint bulk | `88.81 ms` | `87.38 ms` | `SpatiaLite 1.02x` |
+| `ST_SymDifference` disjoint bulk | `91.55 ms` | `86.87 ms` | `SpatiaLite 1.05x` |
 
-sqlitegis is ahead on 12 of the 17 workloads. The wins on the binary predicates (`ST_Intersects`, `ST_Contains`, `ST_Covers`, `ST_Touches`, `ST_Overlaps`, `ST_Equals`) come from an MBR-only fastpath that walks the EWKB bytes for the bounding rectangle and short-circuits the full geometric test when bboxes cannot satisfy the predicate. On filter-heavy "find features in a window" workloads (the vast majority of real PostGIS queries) the negative-row path stops paying for a full decode and runs in ~60 ns instead of a few microseconds per row.
+sqlitegis is ahead on 12 of the 17 workloads and within noise on two more. The wins on the binary predicates (`ST_Intersects`, `ST_Contains`, `ST_Covers`, `ST_Touches`, `ST_Overlaps`, `ST_Equals`) come from an MBR-only fastpath that walks the EWKB bytes for the bounding rectangle and short-circuits the full geometric test when bboxes cannot satisfy the predicate. On filter-heavy "find features in a window" workloads (the vast majority of real PostGIS queries) the negative-row path stops paying for a full decode and runs in ~60 ns instead of a few microseconds per row.
 
 The geodesic margin comes from SpatiaLite's 3-arg `ST_Distance(g1, g2, use_ellipsoid)` paying ellipsoid setup cost even on the sphere branch, while `ST_DistanceSphere` is a direct Haversine on `f64` lat/lon pairs.
 
-The remaining gaps are GEOS-favored. `ST_Centroid` and `ST_Buffer + ST_Intersection` lose by under 1.5x on workloads where decades of GEOS optimisation show up. `ST_Union` and `ST_SymDifference` still lose by ~2.5x on the disjoint-bbox bench even though we already short-circuit the BooleanOps sweep when bboxes don't overlap: the residual cost is the per-row decode and serialize of the constant LHS, which a future `sqlite3_set_auxdata` cache could amortise across rows.
+`ST_Union` and `ST_SymDifference` use a wire-level fastpath on disjoint inputs: a dedicated helper splices the two input EWKB blobs into a `MultiPolygon` result without decoding either side. This avoids both the `geo::BooleanOps` sweep AND the per-row decode/serialize round-trip, closing the gap against SpatiaLite from ~2.5x to within run-to-run noise.
+
+The remaining gaps are GEOS-favored. `ST_Centroid` and `ST_Buffer + ST_Intersection` lose by under 1.5x on workloads where decades of GEOS optimisation show up. `ST_Difference` on disjoint inputs loses by 1.10x for the same reason as the other binary set ops did before the bytes-only emit landed: extending the same splice trick to `ST_Difference` would require returning A unchanged (not a concatenation) but is otherwise mechanical.
 
 ## SpatiaLite naming quirks worth knowing
 
