@@ -3,8 +3,8 @@
 //! # Crate layout
 //!
 //! Modules are gated behind features so consumers only pay for what they
-//! ask for. See the `[features]` table in Cargo.toml for the full list;
-//! in short:
+//! ask for. See the `[features]` table in Cargo.toml for the full list.
+//! In short:
 //!
 //! - `core` is always available (pure-Rust geometry, EWKB I/O, function
 //!   catalog, no SQLite or Diesel deps).

@@ -574,7 +574,7 @@ mod tests {
     #[test]
     fn equals_same_mbr_different_geometry_still_correctly_false() {
         // Same bbox (both 0..2 x 0..2) but different shapes. Fastpath
-        // does NOT fire here; must fall through to full topo equality.
+        // does NOT fire here. Must fall through to full topo equality.
         let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
         let b = geom_from_text("POLYGON((0 0,2 0,2 2,0 0))", None).unwrap();
         assert!(!st_equals(&a, &b).unwrap());

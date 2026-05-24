@@ -86,7 +86,7 @@ const METRES_PER_DEGREE: f64 = 111_320.0;
 ///
 /// let equator = radius_bbox(0.0, 1_000_000.0);
 /// let berlin = radius_bbox(52.5, 1_000_000.0);
-/// // dlat is constant; dlon grows with |lat| because longitude shrinks.
+/// // dlat is constant. dlon grows with |lat| because longitude shrinks.
 /// assert!((equator.dlat - berlin.dlat).abs() < 1e-9);
 /// assert!(berlin.dlon > equator.dlon);
 ///

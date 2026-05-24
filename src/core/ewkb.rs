@@ -469,7 +469,7 @@ fn walk_for_mbr(
             for _ in 0..count {
                 // Each nested element carries its own WKB mini-header
                 // (byte-order byte + 4-byte type). EWKB's SRID flag is only
-                // valid at the top level; nested elements use plain WKB.
+                // valid at the top level. Nested elements use plain WKB.
                 if blob.len() < offset + 5 {
                     return Err(SqliteGisError::InvalidEwkb(format!(
                         "nested WKB header truncated at offset {offset}"
@@ -1543,7 +1543,7 @@ mod tests {
 
     #[test]
     fn concat_one_null_srid_one_some_srid_treated_as_compatible() {
-        // ensure_matching_srid treats None/Some(0) as compatible; verify
+        // ensure_matching_srid treats None/Some(0) as compatible. Verify
         // that passes through to a successful concat.
         let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
         let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", Some(0)).unwrap();
