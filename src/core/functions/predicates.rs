@@ -61,6 +61,16 @@ pub fn st_intersects(a: &[u8], b: &[u8]) -> Result<bool> {
 /// assert!(!st_contains(&poly, &outside).unwrap());
 /// ```
 pub fn st_contains(a: &[u8], b: &[u8]) -> Result<bool> {
+    // MBR-only fastpath. If A's bbox does not fully contain B's bbox,
+    // A cannot contain B. Walks the EWKB bytes for just the bbox and
+    // short-circuits the full decode + contains test for the common
+    // "filter many points against one window" workload where most rows
+    // fall outside the LHS bbox.
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if !ra.contains(&rb) {
+            return Ok(false);
+        }
+    }
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
     Ok(ga.contains(&gb))
 }
@@ -505,6 +515,26 @@ mod tests {
             st_disjoint(&a, &b).unwrap(),
             !st_intersects(&a, &b).unwrap()
         );
+    }
+
+    #[test]
+    fn contains_mbr_not_containing_returns_false() {
+        // A's bbox (0..2 in both axes) does not fully cover B's bbox (4..6).
+        // The MBR fastpath must short-circuit to false without decoding.
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((4 4,6 4,6 6,4 6,4 4))", None).unwrap();
+        assert!(!st_contains(&a, &b).unwrap());
+        // Symmetric: ST_Within delegates to st_contains so inherits the fastpath.
+        assert!(!st_within(&b, &a).unwrap());
+    }
+
+    #[test]
+    fn contains_overlapping_mbrs_but_b_extends_outside_returns_false() {
+        // MBRs overlap but B's right edge extends past A's right edge.
+        // Fastpath should fire here too because A.contains(B.mbr) is false.
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((1 1,3 1,3 3,1 3,1 1))", None).unwrap();
+        assert!(!st_contains(&a, &b).unwrap());
     }
 
     #[test]
