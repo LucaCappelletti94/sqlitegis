@@ -673,4 +673,109 @@ mod tests {
         assert!(decompose_into(rect, &mut bag).is_err());
         let _ = (pt, poly);
     }
+
+    #[test]
+    fn intersection_polygon_multipoint_swapped_filters_outside() {
+        let mp = geom_from_text("MULTIPOINT((1 1),(5 5),(0 0))", None).unwrap();
+        let poly = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let r = st_intersection(&poly, &mp).unwrap();
+        let text = as_text(&r).unwrap();
+        assert!(text.contains("0 0") && text.contains("1 1"));
+        assert!(!text.contains("5 5"));
+    }
+
+    #[test]
+    fn intersection_multipoint_linestring_keeps_on_line_points() {
+        let mp = geom_from_text("MULTIPOINT((1 1),(5 5))", None).unwrap();
+        let ls = geom_from_text("LINESTRING(0 0,2 2)", None).unwrap();
+        let r = st_intersection(&mp, &ls).unwrap();
+        assert_eq!(as_text(&r).unwrap(), "POINT(1 1)");
+    }
+
+    #[test]
+    fn intersection_linestring_multipoint_swapped_keeps_on_line_points() {
+        let mp = geom_from_text("MULTIPOINT((1 1),(5 5))", None).unwrap();
+        let ls = geom_from_text("LINESTRING(0 0,2 2)", None).unwrap();
+        let r = st_intersection(&ls, &mp).unwrap();
+        assert_eq!(as_text(&r).unwrap(), "POINT(1 1)");
+    }
+
+    #[test]
+    fn intersection_disjoint_multipolygon_yields_multipolygon() {
+        let a = geom_from_text(
+            "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((10 0,12 0,12 2,10 2,10 0)))",
+            None,
+        )
+        .unwrap();
+        let b = geom_from_text(
+            "MULTIPOLYGON(((1 0,3 0,3 2,1 2,1 0)),((11 0,13 0,13 2,11 2,11 0)))",
+            None,
+        )
+        .unwrap();
+        let r = st_intersection(&a, &b).unwrap();
+        assert_eq!(st_geometry_type(&r).unwrap(), "ST_MultiPolygon");
+    }
+
+    #[test]
+    fn intersection_multilinestring_polygon_yields_multilinestring() {
+        let mls = geom_from_text("MULTILINESTRING((-1 1,3 1),(-1 0.5,3 0.5))", None).unwrap();
+        let poly = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let r = st_intersection(&mls, &poly).unwrap();
+        assert_eq!(st_geometry_type(&r).unwrap(), "ST_MultiLineString");
+    }
+
+    #[test]
+    fn intersection_geometrycollection_mixed_multi_parts() {
+        let gc = geom_from_text(
+            "GEOMETRYCOLLECTION(MULTIPOINT((1 1),(0 0)),MULTILINESTRING((-1 1,3 1),(-1 0.5,3 0.5)))",
+            None,
+        )
+        .unwrap();
+        let poly = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let r = st_intersection(&gc, &poly).unwrap();
+        assert_eq!(st_geometry_type(&r).unwrap(), "ST_GeometryCollection");
+        let text = as_text(&r).unwrap();
+        assert!(text.contains("MULTIPOINT"), "actual: {text}");
+        assert!(text.contains("MULTILINESTRING"), "actual: {text}");
+    }
+
+    #[test]
+    fn intersection_nested_geometrycollection_recurses() {
+        let gc =
+            geom_from_text("GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(1 1)))", None).unwrap();
+        let poly = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let r = st_intersection(&gc, &poly).unwrap();
+        assert_eq!(as_text(&r).unwrap(), "POINT(1 1)");
+    }
+
+    #[test]
+    fn intersection_empty_inputs_decompose_cleanly() {
+        let empty_mp = geom_from_text("MULTIPOINT EMPTY", None).unwrap();
+        let poly = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let r = st_intersection(&empty_mp, &poly).unwrap();
+        assert!(st_is_empty(&r).unwrap());
+
+        let empty_mls = geom_from_text("MULTILINESTRING EMPTY", None).unwrap();
+        let r2 = st_intersection(&empty_mls, &poly).unwrap();
+        assert!(st_is_empty(&r2).unwrap());
+
+        let empty_mpoly = geom_from_text("MULTIPOLYGON EMPTY", None).unwrap();
+        let r3 = st_intersection(&empty_mpoly, &poly).unwrap();
+        assert!(st_is_empty(&r3).unwrap());
+    }
+
+    #[test]
+    fn intersection_disconnected_linestring_polygon_yields_multilinestring() {
+        let ls = geom_from_text("LINESTRING(-1 1,3 1,3 5,5 5,5 1,7 1)", None).unwrap();
+        let poly_a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let poly_b = geom_from_text("POLYGON((4 0,6 0,6 2,4 2,4 0))", None).unwrap();
+        let mp = geom_from_text(
+            "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+            None,
+        )
+        .unwrap();
+        let r = st_intersection(&ls, &mp).unwrap();
+        assert_eq!(st_geometry_type(&r).unwrap(), "ST_MultiLineString");
+        let _ = (poly_a, poly_b);
+    }
 }
