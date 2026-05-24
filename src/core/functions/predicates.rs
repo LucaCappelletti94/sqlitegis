@@ -265,6 +265,16 @@ pub fn st_covered_by(a: &[u8], b: &[u8]) -> Result<bool> {
 /// assert!(!st_equals(&a, &c).unwrap());
 /// ```
 pub fn st_equals(a: &[u8], b: &[u8]) -> Result<bool> {
+    // MBR-only fastpath. MBR equality is a necessary (but not
+    // sufficient) condition for geometric equality. Different bboxes
+    // imply different point sets, so we can short-circuit to false.
+    // Stronger than the disjoint-MBR check used in `st_intersects`:
+    // even bboxes that overlap but differ in any corner fire this.
+    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+        if ra.min() != rb.min() || ra.max() != rb.max() {
+            return Ok(false);
+        }
+    }
     let (ga, gb, _) = parse_ewkb_pair(a, b)?;
     Ok(ga.relate(&gb).is_equal_topo())
 }
@@ -550,6 +560,24 @@ mod tests {
         assert!(!st_contains(&a, &b).unwrap());
         // Symmetric: ST_Within delegates to st_contains so inherits the fastpath.
         assert!(!st_within(&b, &a).unwrap());
+    }
+
+    #[test]
+    fn equals_different_mbrs_returns_false() {
+        // Different bboxes, so the geometries cannot be equal even though
+        // they overlap in interior. Fastpath should short-circuit.
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((0 0,3 0,3 3,0 3,0 0))", None).unwrap();
+        assert!(!st_equals(&a, &b).unwrap());
+    }
+
+    #[test]
+    fn equals_same_mbr_different_geometry_still_correctly_false() {
+        // Same bbox (both 0..2 x 0..2) but different shapes. Fastpath
+        // does NOT fire here; must fall through to full topo equality.
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((0 0,2 0,2 2,0 0))", None).unwrap();
+        assert!(!st_equals(&a, &b).unwrap());
     }
 
     #[test]
