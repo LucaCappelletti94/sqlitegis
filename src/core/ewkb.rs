@@ -1366,4 +1366,188 @@ mod tests {
         let b = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
         assert!(concat_multipolygon_bodies(&a, &b).is_err());
     }
+
+    // -- edge cases for concat_multipolygon_bodies ---------------------
+
+    /// Hand-craft a big-endian Polygon EWKB for the unit square
+    /// (0,0)->(1,0)->(1,1)->(0,1)->(0,0).
+    fn be_unit_square_polygon(srid: Option<i32>) -> Vec<u8> {
+        let mut blob = vec![0x00u8]; // big-endian marker
+        let type_word = WKB_POLYGON | if srid.is_some() { EWKB_SRID_FLAG } else { 0 };
+        blob.extend_from_slice(&type_word.to_be_bytes());
+        if let Some(s) = srid {
+            blob.extend_from_slice(&s.to_be_bytes());
+        }
+        blob.extend_from_slice(&1u32.to_be_bytes()); // numRings
+        blob.extend_from_slice(&5u32.to_be_bytes()); // numPoints
+        for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)] {
+            blob.extend_from_slice(&f64::to_be_bytes(x));
+            blob.extend_from_slice(&f64::to_be_bytes(y));
+        }
+        blob
+    }
+
+    /// Hand-craft a big-endian MultiPolygon EWKB containing one unit
+    /// square offset by `(dx, dy)`.
+    fn be_unit_square_multipolygon(dx: f64, dy: f64, srid: Option<i32>) -> Vec<u8> {
+        let mut blob = vec![0x00u8];
+        let type_word = WKB_MULTIPOLYGON | if srid.is_some() { EWKB_SRID_FLAG } else { 0 };
+        blob.extend_from_slice(&type_word.to_be_bytes());
+        if let Some(s) = srid {
+            blob.extend_from_slice(&s.to_be_bytes());
+        }
+        blob.extend_from_slice(&1u32.to_be_bytes()); // numPolygons
+                                                     // Sub-polygon: independent endian byte + type + rings.
+        blob.push(0x00u8);
+        blob.extend_from_slice(&WKB_POLYGON.to_be_bytes());
+        blob.extend_from_slice(&1u32.to_be_bytes()); // numRings
+        blob.extend_from_slice(&5u32.to_be_bytes()); // numPoints
+        for (x, y) in [
+            (dx, dy),
+            (dx + 1.0, dy),
+            (dx + 1.0, dy + 1.0),
+            (dx, dy + 1.0),
+            (dx, dy),
+        ] {
+            blob.extend_from_slice(&f64::to_be_bytes(x));
+            blob.extend_from_slice(&f64::to_be_bytes(y));
+        }
+        blob
+    }
+
+    #[test]
+    fn concat_big_endian_polygon_inputs_preserve_sub_polygon_endianness() {
+        let a = be_unit_square_polygon(None);
+        let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", None).unwrap();
+        let combined = concat_multipolygon_bodies(&a, &b).unwrap();
+        // Outer wrapper is always little-endian.
+        assert_eq!(combined[0], 0x01);
+        let hdr = parse_ewkb_header(&combined).unwrap();
+        assert_eq!(hdr.geom_type, WKB_MULTIPOLYGON);
+        // Decode round-trip: area = 2.0 (two unit squares).
+        assert!((area_round_trip(&combined) - 2.0).abs() < 1e-10);
+        assert_eq!(poly_count(&combined), 2);
+    }
+
+    #[test]
+    fn concat_big_endian_multipolygon_input_reads_count_correctly() {
+        let a = be_unit_square_multipolygon(0.0, 0.0, None);
+        let b = be_unit_square_multipolygon(10.0, 0.0, None);
+        let combined = concat_multipolygon_bodies(&a, &b).unwrap();
+        assert_eq!(poly_count(&combined), 2);
+        assert!((area_round_trip(&combined) - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn concat_mixed_endianness_inputs() {
+        let a = be_unit_square_polygon(Some(4326));
+        let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", Some(4326)).unwrap();
+        let combined = concat_multipolygon_bodies(&a, &b).unwrap();
+        let hdr = parse_ewkb_header(&combined).unwrap();
+        assert_eq!(hdr.srid, Some(4326));
+        assert_eq!(poly_count(&combined), 2);
+        assert!((area_round_trip(&combined) - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn concat_rejects_truncated_multipolygon_input() {
+        // Header says MultiPolygon but no polygon-count u32 follows.
+        let mut a = vec![0x01u8];
+        a.extend_from_slice(&WKB_MULTIPOLYGON.to_le_bytes());
+        // Deliberately omit the 4-byte count.
+        let b = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        assert!(concat_multipolygon_bodies(&a, &b).is_err());
+    }
+
+    #[test]
+    fn concat_rejects_z_dimension_inputs() {
+        let mut a = vec![0x01u8];
+        let type_word = WKB_POLYGON | EWKB_Z_FLAG;
+        a.extend_from_slice(&type_word.to_le_bytes());
+        a.extend_from_slice(&1u32.to_le_bytes());
+        a.extend_from_slice(&4u32.to_le_bytes());
+        // Coords don't matter here, header validation fires first.
+        for _ in 0..(4 * 3) {
+            a.extend_from_slice(&0f64.to_le_bytes());
+        }
+        let b = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        let err = concat_multipolygon_bodies(&a, &b).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SqliteGisError::UnsupportedDimensions { dimensions: "Z" }
+            ),
+            "expected Z rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn concat_rejects_m_dimension_inputs() {
+        let mut b = vec![0x01u8];
+        let type_word = WKB_POLYGON | EWKB_M_FLAG;
+        b.extend_from_slice(&type_word.to_le_bytes());
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.extend_from_slice(&4u32.to_le_bytes());
+        for _ in 0..(4 * 3) {
+            b.extend_from_slice(&0f64.to_le_bytes());
+        }
+        let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        assert!(concat_multipolygon_bodies(&a, &b).is_err());
+    }
+
+    #[test]
+    fn concat_rejects_malformed_header_blob_a() {
+        // 3-byte blob: too short for any EWKB header.
+        let a = vec![0x01, 0x03, 0x00];
+        let b = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        assert!(concat_multipolygon_bodies(&a, &b).is_err());
+    }
+
+    #[test]
+    fn concat_rejects_malformed_header_blob_b() {
+        let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        let b = vec![0x42]; // invalid byte-order marker
+        assert!(concat_multipolygon_bodies(&a, &b).is_err());
+    }
+
+    #[test]
+    fn concat_polygon_with_interior_ring_preserves_hole() {
+        // Outer 4x4 square with a 1x1 inner hole at (1,1)-(2,2).
+        let a =
+            geom_from_text("POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))", None).unwrap();
+        let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", None).unwrap();
+        let combined = concat_multipolygon_bodies(&a, &b).unwrap();
+        assert_eq!(poly_count(&combined), 2);
+        // Outer-with-hole: 16 - 1 = 15. Plus 1x1 = 16.
+        assert!((area_round_trip(&combined) - 16.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn concat_polygon_and_empty_multipolygon_yields_single_polygon() {
+        let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        let b = geom_from_text("MULTIPOLYGON EMPTY", None).unwrap();
+        let combined = concat_multipolygon_bodies(&a, &b).unwrap();
+        assert_eq!(poly_count(&combined), 1);
+        assert!((area_round_trip(&combined) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn concat_two_empty_multipolygons_yields_empty_multipolygon() {
+        let a = geom_from_text("MULTIPOLYGON EMPTY", None).unwrap();
+        let b = geom_from_text("MULTIPOLYGON EMPTY", None).unwrap();
+        let combined = concat_multipolygon_bodies(&a, &b).unwrap();
+        let hdr = parse_ewkb_header(&combined).unwrap();
+        assert_eq!(hdr.geom_type, WKB_MULTIPOLYGON);
+        assert_eq!(poly_count(&combined), 0);
+    }
+
+    #[test]
+    fn concat_one_null_srid_one_some_srid_treated_as_compatible() {
+        // ensure_matching_srid treats None/Some(0) as compatible; verify
+        // that passes through to a successful concat.
+        let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", Some(0)).unwrap();
+        let combined = concat_multipolygon_bodies(&a, &b).unwrap();
+        assert_eq!(poly_count(&combined), 2);
+    }
 }
