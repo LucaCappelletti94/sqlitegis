@@ -1,6 +1,6 @@
 # sqlitegis benchmarks
 
-All measurements were captured on the same machine with [Criterion](https://github.com/bheisler/criterion.rs) using its default 100-sample protocol. Numbers are central estimates; the deltas reported as "sqlitegis Nx" or "SpatiaLite Nx" are ratios of the two libraries' medians on the same query.
+All measurements were captured on the same machine with [Criterion](https://github.com/bheisler/criterion.rs) using its default 100-sample protocol. Numbers are central estimates. The deltas reported as "sqlitegis Nx" or "SpatiaLite Nx" are ratios of the two libraries' medians on the same query.
 
 ## R-tree workloads
 
@@ -23,7 +23,7 @@ cargo bench --features diesel-sqlite --bench spatial_index
 
 SpatiaLite would have been the obvious choice except for two practical issues. Its C/C++/GEOS/PROJ build chain is a recurring source of friction (a substantial native build with several optional system libraries), and it does not run cleanly on WebAssembly or edge devices. A pure Rust crate compiles to those targets without extra tooling and pulls no transitive C dependencies. That is the gap sqlitegis fills.
 
-`benches/spatialite_vs_sqlitegis.rs` (gated behind the `bench-spatialite` Cargo feature, requires `libsqlite3-mod-spatialite` installed system-wide) runs both libraries on the same in-process libsqlite3, so the comparison isolates per-callback cost from engine differences. The dataset is 50k random WGS84 points in `places` and 50k random 0.1-degree axis-aligned polygons in `regions`; both libraries see identical bytes.
+`benches/spatialite_vs_sqlitegis.rs` (gated behind the `bench-spatialite` Cargo feature, requires `libsqlite3-mod-spatialite` installed system-wide) runs both libraries on the same in-process libsqlite3, so the comparison isolates per-callback cost from engine differences. The dataset is 50k random WGS84 points in `places` and 50k random 0.1-degree axis-aligned polygons in `regions`. Both libraries see identical bytes.
 
 | Workload | sqlitegis | SpatiaLite | Ratio |
 | --- | ---: | ---: | --- |
@@ -63,24 +63,24 @@ sqlitegis is ahead on 20 of the 31 workloads, within run-to-run noise on two mor
 
 **Predicate wins.** The binary predicates (`ST_Intersects`, `ST_Contains`, `ST_Covers`, `ST_Touches`, `ST_Overlaps`, `ST_Equals`) win 1.2x to 1.7x via an MBR-only fastpath that walks the EWKB bytes for the bounding rectangle and short-circuits the full geometric test when bboxes cannot satisfy the predicate. On filter-heavy "find features in a window" workloads the negative-row path stops paying for a full decode and runs in ~60 ns instead of a few microseconds per row.
 
-**Geodesic family wins.** All five geodesic workloads (`ST_DistanceSphere`, `ST_DistanceSpheroid`, `ST_DWithinSphere`, `ST_DWithinSpheroid`, planar `ST_Distance`) put sqlitegis ahead, ranging from 1.2x to 8.6x. SpatiaLite's 3-arg `ST_Distance(g1, g2, use_ellipsoid)` pays PROJ-based ellipsoid setup cost even on the sphere branch; sqlitegis uses direct Haversine on `f64` lat/lon pairs for the sphere variant and `geographiclib-rs` for the ellipsoid variant.
+**Geodesic family wins.** All five geodesic workloads (`ST_DistanceSphere`, `ST_DistanceSpheroid`, `ST_DWithinSphere`, `ST_DWithinSpheroid`, planar `ST_Distance`) put sqlitegis ahead, ranging from 1.2x to 8.6x. SpatiaLite's 3-arg `ST_Distance(g1, g2, use_ellipsoid)` pays PROJ-based ellipsoid setup cost even on the sphere branch. sqlitegis uses direct Haversine on `f64` lat/lon pairs for the sphere variant and `geographiclib-rs` for the ellipsoid variant.
 
-**Set-op wire-level fastpath.** `ST_Union` and `ST_SymDifference` on disjoint inputs splice the two input EWKB blobs into a `MultiPolygon` result without decoding either side. That closes the SpatiaLite gap from ~2.5x to within run-to-run noise. `ST_Difference` overlapping unexpectedly wins 2x even on the BooleanOps slow path. `ST_Difference` disjoint still loses by 1.14x; extending the splice trick to "return A unchanged" would close it.
+**Set-op wire-level fastpath.** `ST_Union` and `ST_SymDifference` on disjoint inputs splice the two input EWKB blobs into a `MultiPolygon` result without decoding either side. That closes the SpatiaLite gap from ~2.5x to within run-to-run noise. `ST_Difference` overlapping unexpectedly wins 2x even on the BooleanOps slow path. `ST_Difference` disjoint still loses by 1.14x. Extending the splice trick to "return A unchanged" would close it.
 
 **I/O wins, with one exception.** `ST_GeomFromText` and `ST_GeomFromWKB` parse 2x faster, `ST_AsText` serialises 1.75x faster, `ST_AsGeoJSON` 2x faster. The exception is `ST_AsBinary` at 3.70x slower: today it round-trips through `geo::Geometry` plus geozero serializer even though the conversion from EWKB to ISO WKB is byte-level trivial for XY inputs (strip SRID flag from type word, strip the SRID bytes, copy the rest). Identified optimisation candidate.
 
 **Remaining GEOS-favored gaps.** `ST_Centroid` and `ST_Buffer + ST_Intersection` lose by under 1.5x where decades of GEOS optimisation show up. `ST_Envelope` loses 3.49x for the same reason `ST_AsBinary` does: today goes through full decode + bounding rect + serialize, when `extract_mbr` already walks the EWKB and an MBR-fastpath would build the 5-vertex result polygon by hand. Identified optimisation candidate.
 
-**Surprise scalar losses.** `ST_X`, `ST_Y`, `ST_Area`, `ST_Perimeter` lose ~2-3x on what should be near-trivial header walks. SpatiaLite likely binds these as thin C wrappers that read a few EWKB bytes directly; sqlitegis goes through geozero's full decode path. A header-walk-only fastpath for these (in the spirit of `extract_mbr`) is plausible follow-up work.
+**Surprise scalar losses.** `ST_X`, `ST_Y`, `ST_Area`, `ST_Perimeter` lose ~2-3x on what should be near-trivial header walks. SpatiaLite likely binds these as thin C wrappers that read a few EWKB bytes directly. sqlitegis goes through geozero's full decode path. A header-walk-only fastpath for these (in the spirit of `extract_mbr`) is plausible follow-up work.
 
 ## SpatiaLite naming quirks worth knowing
 
-While porting bench queries between the two libraries, the following function-name differences mattered. None of them are sqlitegis bugs; documented here for anyone porting queries.
+While porting bench queries between the two libraries, the following function-name differences mattered. None of them are sqlitegis bugs. Documented here for anyone porting queries.
 
 - `ST_DistanceSphere(g1, g2)` (PostGIS / sqlitegis) is `ST_Distance(g1, g2, 0)` in SpatiaLite 5.1.0.
 - `ST_DistanceSpheroid(g1, g2)` is `ST_Distance(g1, g2, 1)` in SpatiaLite 5.1.0.
-- `ST_MakeEnvelope(xmin, ymin, xmax, ymax, srid)` is not present in SpatiaLite 5.1.0; bench code constructs the envelope as a `POLYGON` WKT literal instead.
-- `ST_DWithin(g1, g2, dist)` is not present in SpatiaLite 5.1.0; bench code rewrites it as `ST_Distance(g1, g2) <= dist`. The same rewrite applies to `ST_DWithinSphere` (`ST_Distance(g1, g2, 0) <= dist`) and `ST_DWithinSpheroid` (`ST_Distance(g1, g2, 1) <= dist`).
+- `ST_MakeEnvelope(xmin, ymin, xmax, ymax, srid)` is not present in SpatiaLite 5.1.0. Bench code constructs the envelope as a `POLYGON` WKT literal instead.
+- `ST_DWithin(g1, g2, dist)` is not present in SpatiaLite 5.1.0. Bench code rewrites it as `ST_Distance(g1, g2) <= dist`. The same rewrite applies to `ST_DWithinSphere` (`ST_Distance(g1, g2, 0) <= dist`) and `ST_DWithinSpheroid` (`ST_Distance(g1, g2, 1) <= dist`).
 - `ST_AsGeoJSON(g)` (PostGIS / sqlitegis) is `AsGeoJSON(g)` (no `ST_` prefix) in SpatiaLite 5.1.0.
 - `GreatCircleDistance` was present in SpatiaLite 4.x but removed in 5.x.
 

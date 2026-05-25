@@ -20,7 +20,7 @@ TARGETS=(
 #                      Disjoint-MBR pairs take the bytes-only fastpath
 #                      which barely allocates, but overlapping pairs go
 #                      through full geozero decode + i_overlay sweep
-#                      under ASAN; the allocator fragments over time and
+#                      under ASAN. The allocator fragments over time and
 #                      8 GiB gives ample headroom on this machine.
 LIBFUZZER_ARGS=(-timeout=15 -max_len=65536 -rss_limit_mb=8192)
 
@@ -31,7 +31,7 @@ fi
 
 run_target() {
     local target="$1"
-    # cargo-fuzz is invoked from the repo root; it discovers the fuzz/
+    # cargo-fuzz is invoked from the repo root. It discovers the fuzz/
     # subcrate automatically. `cd` first so the command works regardless
     # of where the user launched the script.
     printf 'cd %q && cargo +nightly fuzz run %q -- %s; read -r -p '\''Press enter to close...'\''' \

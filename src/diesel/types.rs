@@ -108,7 +108,7 @@ mod sqlite_impls {
     // --- geo::Geometry<f64> ---
     //
     // The only semantic difference between Geometry and Geography here is the
-    // SRID arg: Geometry writes no SRID and accepts any; Geography forces
+    // SRID arg: Geometry writes no SRID and accepts any. Geography forces
     // 4326 on write and requires 4326 on read.
 
     macro_rules! impl_geo_geometry_sqlite {

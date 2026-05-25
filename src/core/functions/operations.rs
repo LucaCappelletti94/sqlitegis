@@ -194,7 +194,7 @@ fn intersect_bags(a: &GeometryBag, b: &GeometryBag) -> GeometryBag {
 }
 
 /// Naive O(n*m) pairwise segment-intersection sweep. Sufficient for typical
-/// LineString sizes; a Bentley-Ottmann sweep would only pay off for very
+/// LineString sizes. A Bentley-Ottmann sweep would only pay off for very
 /// long, very sparse-intersection inputs.
 fn intersect_lines_into(a: &[LineString<f64>], b: &[LineString<f64>], out: &mut GeometryBag) {
     let mut collinear: Vec<LineString<f64>> = Vec::new();
