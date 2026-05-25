@@ -36,6 +36,11 @@ dioxus-free-icons = { version = "0.10", features = ["font-awesome-solid", "font-
 # Shared worker message protocol. Pure-data serde crate, no sqlite deps.
 sqlitegis-web-demo-protocol = { path = "protocol" }
 
+# Parses the GeoJSON strings that geometry-returning queries project into a
+# `geojson` column, so the map can draw lines and polygons. Lightweight, no
+# geo/geozero pulled into the UI bundle.
+serde_json = "1"
+
 # Browser interop. SQLite now lives in `worker/` so this bundle no longer
 # carries diesel / sqlite-wasm-rs / sqlitegis.
 wasm-bindgen = "0.2"

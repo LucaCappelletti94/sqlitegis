@@ -7,6 +7,8 @@ use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
+use crate::geometry::MapGeometry;
+
 const CANVAS_ID: &str = "sqlitegis-map";
 const CANVAS_W: u32 = 1080;
 const CANVAS_H: u32 = 540;
@@ -19,6 +21,7 @@ const CLICK_PX_THRESHOLD: f64 = 5.0;
 pub fn WorldMap(
     coords: ReadSignal<Vec<(f64, f64)>>,
     highlighted: ReadSignal<Vec<(f64, f64)>>,
+    geometries: ReadSignal<Vec<MapGeometry>>,
     user_lon: Signal<f64>,
     user_lat: Signal<f64>,
 ) -> Element {
@@ -36,12 +39,13 @@ pub fn WorldMap(
     use_effect(move || {
         let all = coords.read();
         let hits = highlighted.read();
+        let geoms = geometries.read();
         let ux = *user_lon.read();
         let uy = *user_lat.read();
         let z = *zoom.read();
         let clon = *center_lon.read();
         let clat = *center_lat.read();
-        draw(&all, &hits, (ux, uy), z, clon, clat);
+        draw(&all, &hits, &geoms, (ux, uy), z, clon, clat);
     });
 
     rsx! {
@@ -148,6 +152,7 @@ fn display_size() -> Option<(f64, f64)> {
 fn draw(
     all: &[(f64, f64)],
     highlighted: &[(f64, f64)],
+    geometries: &[MapGeometry],
     user: (f64, f64),
     zoom: f64,
     center_lon: f64,
@@ -246,6 +251,42 @@ fn draw(
         ctx.fill_rect(x - hit / 2.0, y - hit / 2.0, hit, hit);
     }
 
+    // Geometry overlays (lines, polygons) parsed from a `geojson` result
+    // column. Drawn in the same blue as the point hits. Vertices off the
+    // visible canvas are fine, the canvas clips them. A line or polygon that
+    // crosses the antimeridian renders as a horizontal smear, which we accept
+    // for the demo rather than splitting the ring at +/-180.
+    ctx.set_stroke_style_str(&String::from("#057DBE"));
+    ctx.set_fill_style_str(&String::from("rgba(5, 125, 190, 0.25)"));
+    ctx.set_line_width(2.0);
+    for geom in geometries {
+        match geom {
+            MapGeometry::Point((lon, lat)) => {
+                let x = project_x(*lon, w, zoom, center_lon);
+                let y = project_y(*lat, h, zoom, center_lat);
+                ctx.set_fill_style_str(&String::from("#057DBE"));
+                ctx.fill_rect(x - hit / 2.0, y - hit / 2.0, hit, hit);
+                ctx.set_fill_style_str(&String::from("rgba(5, 125, 190, 0.25)"));
+            }
+            MapGeometry::Line(points) => {
+                ctx.begin_path();
+                trace_path(&ctx, points, w, h, zoom, center_lon, center_lat, false);
+                ctx.stroke();
+            }
+            MapGeometry::Polygon { rings } => {
+                ctx.begin_path();
+                for ring in rings {
+                    trace_path(&ctx, ring, w, h, zoom, center_lon, center_lat, true);
+                }
+                // Default nonzero fill. Holes wind the same direction as the
+                // exterior here, so they are not cut out, but the exterior is
+                // filled correctly, which is what the demo needs.
+                ctx.fill();
+                ctx.stroke();
+            }
+        }
+    }
+
     // User marker.
     let (ulon, ulat) = user;
     if (lon_min - 1.0..=lon_max + 1.0).contains(&ulon)
@@ -257,6 +298,36 @@ fn draw(
         ctx.begin_path();
         let _ = ctx.arc(x, y, 6.0, 0.0, std::f64::consts::TAU);
         ctx.fill();
+    }
+}
+
+/// Trace a sequence of lon/lat vertices onto the current path using the
+/// active projection. Assumes the caller has already called `begin_path`.
+/// When `close` is set the subpath is closed (used for polygon rings).
+#[allow(clippy::too_many_arguments)]
+fn trace_path(
+    ctx: &CanvasRenderingContext2d,
+    points: &[(f64, f64)],
+    w: f64,
+    h: f64,
+    zoom: f64,
+    center_lon: f64,
+    center_lat: f64,
+    close: bool,
+) {
+    let mut first = true;
+    for &(lon, lat) in points {
+        let x = project_x(lon, w, zoom, center_lon);
+        let y = project_y(lat, h, zoom, center_lat);
+        if first {
+            ctx.move_to(x, y);
+            first = false;
+        } else {
+            ctx.line_to(x, y);
+        }
+    }
+    if close {
+        ctx.close_path();
     }
 }
 

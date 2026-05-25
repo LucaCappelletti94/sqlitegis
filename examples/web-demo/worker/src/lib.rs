@@ -23,6 +23,7 @@ mod worker {
     use gloo_net::http::Request;
     use gloo_timers::future::TimeoutFuture;
     use js_sys::global;
+    use sqlitegis::diesel::functions::st_point_srid;
     use sqlitegis_web_demo_protocol::{
         LoadReport, LonLat, QueryRows, WorkerRequest, WorkerResponse,
     };
@@ -31,6 +32,19 @@ mod worker {
     use wasm_bindgen::{JsCast, JsValue};
     use wasm_bindgen_futures::spawn_local;
     use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
+
+    // Typed schema for the `places` table the loader fills. Mirrors the
+    // CREATE TABLE in `state::DEFAULT_SCHEMA_SQL`. Only the loader uses it;
+    // user-typed queries still run as raw SQL through `handle_query`.
+    diesel::table! {
+        places (id) {
+            id -> diesel::sql_types::Integer,
+            name -> diesel::sql_types::Text,
+            country -> diesel::sql_types::Nullable<diesel::sql_types::Text>,
+            population -> diesel::sql_types::BigInt,
+            geom -> sqlitegis::diesel::Geometry,
+        }
+    }
 
     const BATCH_ROWS: usize = 1000;
 
@@ -171,12 +185,15 @@ mod worker {
         let lines: Vec<&str> = body.lines().collect();
         let total = lines.len();
         let mut inserted = 0usize;
-        let mut batch_sql = String::with_capacity(BATCH_ROWS * 140);
         let mut batch_coords: Vec<LonLat> = Vec::with_capacity(BATCH_ROWS);
 
         for chunk in lines.chunks(BATCH_ROWS) {
-            batch_sql.clear();
             batch_coords.clear();
+            // One typed Diesel insert per chunk. Every field binds as a
+            // parameter (no manual escaping or SQL string building) and the
+            // geometry column is written as ST_Point(?, ?, 4326). The probe
+            // queries need SRID 4326, hence st_point_srid.
+            let mut rows = Vec::with_capacity(chunk.len());
             for line in chunk {
                 let mut cols = line.split('\t');
                 let (Some(name), Some(country), Some(lat_s), Some(lon_s), Some(pop_s)) = (
@@ -195,21 +212,29 @@ mod worker {
                     continue;
                 }
                 let pop: i64 = pop_s.parse().unwrap_or(0);
-                let name_esc = sql_escape(name);
-                let country_lit = if country.is_empty() {
-                    "NULL".to_string()
-                } else {
-                    format!("'{}'", sql_escape(country))
-                };
+                let country_val = (!country.is_empty()).then(|| country.to_string());
 
-                batch_sql.push_str(&format!(
-                    "INSERT INTO places (name, country, population, geom) VALUES ('{name_esc}', {country_lit}, {pop}, ST_Point({lon}, {lat}, 4326));\n",
+                rows.push((
+                    places::name.eq(name.to_string()),
+                    places::country.eq(country_val),
+                    places::population.eq(pop),
+                    places::geom.eq(st_point_srid(lon, lat, 4326)),
                 ));
                 batch_coords.push((lon, lat));
                 inserted += 1;
             }
 
-            if let Err(message) = run_script(&batch_sql) {
+            // The whole chunk may have been skipped (malformed rows). Only run
+            // a statement when at least one row survived.
+            if rows.is_empty() {
+                continue;
+            }
+            if let Err(message) = with_conn(|c| {
+                diesel::insert_into(places::table)
+                    .values(rows)
+                    .execute(c)
+                    .map_err(|e| e.to_string())
+            }) {
                 post_error(token, format!("batch INSERT: {message}"));
                 return;
             }
@@ -226,6 +251,16 @@ mod worker {
 
         if let Err(message) = run_script("COMMIT;") {
             post_error(token, format!("COMMIT: {message}"));
+            return;
+        }
+
+        // Build the R-tree now that every row is in. CreateSpatialIndex
+        // populates the shadow table in one set-based pass, far cheaper than
+        // the per-INSERT maintenance trigger we would have paid had the index
+        // existed during the bulk load. Included in the measured elapsed time
+        // so the reported number reflects a fully queryable, indexed database.
+        if let Err(message) = run_script("SELECT CreateSpatialIndex('places', 'geom');") {
+            post_error(token, format!("CreateSpatialIndex: {message}"));
             return;
         }
 
@@ -352,10 +387,6 @@ mod worker {
         } else {
             format!("{v}")
         }
-    }
-
-    fn sql_escape(s: &str) -> String {
-        s.replace('\'', "''")
     }
 }
 

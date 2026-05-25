@@ -11,5 +11,8 @@ CREATE TABLE places (
   population INTEGER,
   geom       BLOB NOT NULL
 );
--- R-tree shadow `places_geom_rtree`. KNN/bbox queries are ~50x faster.
-SELECT CreateSpatialIndex('places', 'geom');";
+-- The R-tree shadow `places_geom_rtree` (KNN/bbox queries ~50x faster) is
+-- built by CreateSpatialIndex AFTER the dataset finishes loading. Creating it
+-- up front would fire the index-maintenance trigger on every one of the 68k
+-- inserts; deferring it lets the index populate in a single set-based pass and
+-- keeps the bulk load fast.";
