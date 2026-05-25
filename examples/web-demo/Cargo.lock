@@ -3083,7 +3083,7 @@ dependencies = [
 
 [[package]]
 name = "sqlitegis"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "diesel",
  "geo",
@@ -3109,6 +3109,7 @@ dependencies = [
  "js-sys",
  "log",
  "serde-wasm-bindgen",
+ "serde_json",
  "sqlitegis-web-demo-protocol",
  "wasm-bindgen",
  "wasm-bindgen-cli-support",

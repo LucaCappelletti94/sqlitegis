@@ -2,6 +2,7 @@
 //! entirely in the browser via sqlite-wasm-rs.
 
 mod components;
+mod geometry;
 mod state;
 mod viz;
 mod worker_handle;
@@ -15,6 +16,7 @@ use dioxus_free_icons::Icon;
 use sqlitegis_web_demo_protocol::QueryOutcome;
 
 use crate::components::{QueryPanel, ResultsPanel, SchemaPanel};
+use crate::geometry::MapGeometry;
 use crate::viz::WorldMap;
 
 fn main() {
@@ -81,6 +83,10 @@ fn App() -> Element {
     let mut stage = use_signal(|| LoadStage::Booting);
     let mut all_coords = use_signal::<Vec<(f64, f64)>>(Vec::new);
     let mut highlighted = use_signal::<Vec<(f64, f64)>>(Vec::new);
+    let mut geometries = use_signal::<Vec<MapGeometry>>(Vec::new);
+    // Caption shown over the map when a result has rows but nothing the map
+    // can draw (aggregations, query plans). None when the map has features.
+    let mut map_note = use_signal::<Option<String>>(|| None);
     // NaN sentinel: signals become real numbers after the loader picks a
     // random starting city. The query auto-rerun effect skips while NaN.
     let mut user_lon = use_signal(|| f64::NAN);
@@ -225,6 +231,7 @@ fn App() -> Element {
                     WorldMap {
                         coords: all_coords,
                         highlighted,
+                        geometries,
                         user_lon,
                         user_lat,
                     }
@@ -245,9 +252,23 @@ fn App() -> Element {
                         user_lat,
                         on_outcome: move |o: QueryOutcome| {
                             if let QueryOutcome::Rows { ref result, .. } = o {
-                                highlighted.set(worker_handle::extract_lonlat(result));
+                                let pts = worker_handle::extract_lonlat(result);
+                                let geoms = geometry::extract_geometries(result);
+                                let has_features = !pts.is_empty() || !geoms.is_empty();
+                                let n = result.rows.len();
+                                highlighted.set(pts);
+                                geometries.set(geoms);
+                                map_note.set(if !has_features && n > 0 {
+                                    Some(format!(
+                                        "This result has no mappable geometry. {n} rows shown in the table below."
+                                    ))
+                                } else {
+                                    None
+                                });
                             } else {
                                 highlighted.set(Vec::new());
+                                geometries.set(Vec::new());
+                                map_note.set(None);
                             }
                             outcome.set(Some(o));
                         },
@@ -256,6 +277,8 @@ fn App() -> Element {
                         on_reset: move |schema_sql: String| {
                             outcome.set(None);
                             highlighted.set(Vec::new());
+                            geometries.set(Vec::new());
+                            map_note.set(None);
                             all_coords.set(Vec::new());
                             user_lon.set(f64::NAN);
                             user_lat.set(f64::NAN);
@@ -275,11 +298,17 @@ fn App() -> Element {
                         }
                     }
                     ResultsPanel { outcome: outcome.read().clone() }
-                    WorldMap {
-                        coords: all_coords,
-                        highlighted,
-                        user_lon,
-                        user_lat,
+                    div { class: "map-cell",
+                        WorldMap {
+                            coords: all_coords,
+                            highlighted,
+                            geometries,
+                            user_lon,
+                            user_lat,
+                        }
+                        if let Some(note) = map_note.read().as_ref() {
+                            p { class: "meta", "{note}" }
+                        }
                     }
                 }
             }

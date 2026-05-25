@@ -5,8 +5,8 @@ use dioxus_code::{CodeTheme, Theme};
 use dioxus_code_editor::{CodeEditor, Language};
 use dioxus_free_icons::icons::fa_solid_icons::{
     FaArrowsRotate, FaArrowsToCircle, FaBullseye, FaCircleCheck, FaCircleDot, FaCode, FaCompass,
-    FaDatabase, FaFileCode, FaFlag, FaFont, FaLocationArrow, FaMagnifyingGlass, FaPlay, FaRoute,
-    FaScaleBalanced, FaTriangleExclamation, FaVectorSquare,
+    FaDatabase, FaDrawPolygon, FaFileCode, FaFlag, FaFont, FaLocationArrow, FaMagnifyingGlass,
+    FaPlay, FaRoute, FaScaleBalanced, FaTriangleExclamation, FaVectorSquare,
 };
 use dioxus_free_icons::Icon;
 
@@ -76,10 +76,13 @@ WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
 ORDER BY km LIMIT 100;";
 
 const PRESET_RADIUS: &str = "\
--- Cities within 1000 km of your location. R-tree bbox prefilter then geodesic
--- refinement. dlon scales with 1/cos(lat) so the bound stays safe at the poles
--- where one degree of longitude shrinks.
+-- The 100 cities closest to the 1000 km boundary around the probe. Same R-tree
+-- bbox prefilter (dlon scales with 1/cos(lat) so it stays safe near the poles)
+-- and ST_DWithinSphere circle test, but ordered by geodesic distance
+-- DESCENDING and capped, so the highlighted points trace the edge of the
+-- radius instead of filling its dense interior.
 SELECT p.name, p.country, p.population,
+  ROUND(ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) / 1000.0, 1) AS km,
   ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
 FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
 WHERE r.xmax >= :lon - 1000000.0 / (111320.0 * cos(radians(:lat)))
@@ -87,7 +90,7 @@ WHERE r.xmax >= :lon - 1000000.0 / (111320.0 * cos(radians(:lat)))
   AND r.ymax >= :lat - 1000000.0 / 111320.0
   AND r.ymin <= :lat + 1000000.0 / 111320.0
   AND ST_DWithinSphere(p.geom, ST_Point(:lon, :lat, 4326), 1000000.0)
-ORDER BY p.population DESC;";
+ORDER BY km DESC LIMIT 100;";
 
 const PRESET_ENVELOPE: &str = "\
 -- Cities inside a 30x30 degree box centered on the probe. For a point-only
@@ -132,29 +135,28 @@ SELECT
 FROM compass;";
 
 const PRESET_POLYLINE: &str = "\
--- Build a polyline between the two cities nearest the probe and report its
--- geodesic (km) and planar (degrees) length. ST_MakeLine builds a 2-point
--- LineString. ST_LengthSphere needs SRID 4326 input. ST_Length is the
--- CRS-units planar measure.
-WITH nearest AS (
-  SELECT p.name, p.geom,
-    ST_DistanceSphere(p.geom, ST_Point(:lon, :lat, 4326)) AS d
+-- A west-to-east tour through the 15 most populous cities within 3000 km of
+-- the probe. ST_DWithinSphere selects the region on the WGS84 sphere, then the
+-- cities' coordinates are stitched (ordered by longitude) into a GeoJSON
+-- LineString the map draws as one connected route. The two group_concat calls
+-- build the readable name list and the coordinate array in a single pass.
+WITH tour AS (
+  SELECT p.name, ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
   FROM places p JOIN places_geom_rtree r ON p.rowid = r.id
-  WHERE r.xmax >= :lon - 10 AND r.xmin <= :lon + 10
-    AND r.ymax >= :lat - 10 AND r.ymin <= :lat + 10
-  ORDER BY d LIMIT 2
-),
-endpoints AS (
-  SELECT (SELECT geom FROM nearest LIMIT 1) AS a,
-         (SELECT geom FROM nearest LIMIT 1 OFFSET 1) AS b
+  WHERE r.xmax >= :lon - 3000000.0 / (111320.0 * cos(radians(:lat)))
+    AND r.xmin <= :lon + 3000000.0 / (111320.0 * cos(radians(:lat)))
+    AND r.ymax >= :lat - 3000000.0 / 111320.0
+    AND r.ymin <= :lat + 3000000.0 / 111320.0
+    AND ST_DWithinSphere(p.geom, ST_Point(:lon, :lat, 4326), 3000000.0)
+  ORDER BY p.population DESC LIMIT 15
 )
 SELECT
-  name AS endpoint,
-  ROUND(d / 1000.0, 1) AS km_from_probe,
-  ROUND(ST_LengthSphere(ST_MakeLine(a, b)) / 1000.0, 1) AS segment_km,
-  ROUND(ST_Length(ST_MakeLine(a, b)), 3) AS segment_planar_deg,
-  ST_X(geom) AS lon, ST_Y(geom) AS lat
-FROM nearest CROSS JOIN endpoints;";
+  COUNT(*) AS stops,
+  group_concat(name, ' -> ' ORDER BY lon) AS route,
+  '{\"type\":\"LineString\",\"coordinates\":[' ||
+    group_concat('[' || ROUND(lon, 5) || ',' || ROUND(lat, 5) || ']' ORDER BY lon) ||
+  ']}' AS geojson
+FROM tour;";
 
 const PRESET_SPHEROID: &str = "\
 -- Compare ST_DistanceSphere (Haversine) and ST_DistanceSpheroid (Karney) for
@@ -230,6 +232,13 @@ FROM (
 )
 GROUP BY ring ORDER BY MIN(d);";
 
+const PRESET_BUFFER: &str = "\
+-- Draw a 5-degree planar buffer polygon around the probe point. ST_Buffer
+-- expands the point into a ring (a circle in lon/lat space, which the
+-- equirectangular map renders as an ellipse). The result is one row whose
+-- geojson column the map fills in as a polygon overlay.
+SELECT ST_AsGeoJSON(ST_Buffer(ST_Point(:lon, :lat, 4326), 5.0)) AS geojson;";
+
 const PRESET_GEOJSON: &str = "\
 -- Serialize the 100 cities nearest the probe to GeoJSON. R-tree-prefiltered
 -- with a 10-degree bbox, ORDER BY refines.
@@ -290,7 +299,7 @@ pub fn QueryPanel(
                     }
                     PresetChip {
                         label: "Radius",
-                        description: "List every city within 1000 km of the probe point. R-tree prefiltered so the engine touches O(log N) candidates instead of every row",
+                        description: "Highlight the 100 cities closest to the 1000 km boundary around the probe, ordered by geodesic distance descending so the points trace the edge of the radius",
                         icon: rsx! { Icon { width: 11, height: 11, icon: FaCompass, class: "btn-icon".to_string() } },
                         active: active_preset.read().as_str() == "Radius",
                         on_pick: move |_| {
@@ -338,13 +347,25 @@ pub fn QueryPanel(
                     }
                     PresetChip {
                         label: "Polyline",
-                        description: "Build a polyline between the two cities nearest the probe and report its geodesic and planar length via ST_MakeLine + ST_LengthSphere + ST_Length",
+                        description: "Stitch the 15 most populous cities within 3000 km of the probe into a west-to-east GeoJSON LineString the map draws as one connected route",
                         icon: rsx! { Icon { width: 11, height: 11, icon: FaRoute, class: "btn-icon".to_string() } },
                         active: active_preset.read().as_str() == "Polyline",
                         on_pick: move |_| {
                             let new_sql = PRESET_POLYLINE.to_string();
                             sql.set(new_sql.clone());
                             active_preset.set("Polyline".to_string());
+                            let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
+                        },
+                    }
+                    PresetChip {
+                        label: "Buffer",
+                        description: "Expand the probe point into a 5-degree buffer polygon with ST_Buffer and draw the ring on the map as a filled polygon overlay",
+                        icon: rsx! { Icon { width: 11, height: 11, icon: FaDrawPolygon, class: "btn-icon".to_string() } },
+                        active: active_preset.read().as_str() == "Buffer",
+                        on_pick: move |_| {
+                            let new_sql = PRESET_BUFFER.to_string();
+                            sql.set(new_sql.clone());
+                            active_preset.set("Buffer".to_string());
                             let lon = *user_lon.read(); let lat = *user_lat.read(); let new_sql = new_sql.clone(); let outcome_handler = on_outcome; spawn(async move { let outcome = worker_handle::run_query(&new_sql, lon, lat).await; outcome_handler.call(outcome); });
                         },
                     }
