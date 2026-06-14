@@ -31,6 +31,15 @@ cargo deny check --all-features
 
 The cargo-deny policy lives in [`deny.toml`](deny.toml). The license allow-list is intentionally tight (only licenses actually present in the tree), so a dependency update that pulls a new license fails the check and forces a deliberate review.
 
+## Miri (undefined-behavior checks)
+
+CI runs [Miri](https://github.com/rust-lang/miri) over the untrusted-input boundary: the EWKB parser and the accessor/I/O/constructor modules that decode and serialize blobs. Miri cannot interpret the SQLite C library or the inline assembly in `i_overlay` (the geometry-algorithm crate), so it is scoped to those pure byte-level modules with `--no-default-features`.
+
+```sh
+rustup +nightly component add miri
+MIRIFLAGS=-Zmiri-strict-provenance cargo +nightly miri test --no-default-features --lib core::ewkb
+```
+
 ## Building the loadable SQLite extension
 
 ```sh

@@ -223,6 +223,38 @@ jobs:
           command: check
           arguments: --all-features
 
+  # Miri interprets the MIR to catch undefined behavior (out-of-bounds reads,
+  # invalid provenance, uninitialized reads) that rustc and tests miss. It
+  # cannot interpret the SQLite C library or the inline assembly in i_overlay
+  # (geometry algorithms), so it is scoped to the pure byte-level boundary:
+  # the EWKB parser plus the accessor/I/O/constructor modules that decode and
+  # serialize untrusted blobs. -Zmiri-strict-provenance uses the strictest
+  # pointer-provenance model.
+  miri:
+    name: Miri (EWKB byte-level boundary)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo miri setup --no-default-features
+      - name: Run Miri over the untrusted-input boundary
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+        run: |
+          for filter in \
+            core::ewkb \
+            core::functions::accessors \
+            core::functions::io \
+            core::functions::constructors; do
+            echo "::group::miri $filter"
+            cargo miri test --no-default-features --lib "$filter"
+            echo "::endgroup::"
+          done
+
   # README is included verbatim into the crate root docs via
   # include_str! in src/lib.rs, so any relative markdown link there
   # gets resolved against docs.rs/sqlitegis/latest/sqlitegis/ instead
