@@ -1,5 +1,9 @@
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
+// Every unsafe operation inside an `unsafe fn` must sit in an explicit
+// `unsafe {}` block, so each one is an acknowledged hazard rather than riding
+// on the function-level `unsafe`. See the safety contract in `sqlite::ffi`.
+#![deny(unsafe_op_in_unsafe_fn)]
 //! # Crate layout
 //!
 //! Modules are gated behind features so consumers only pay for what they
