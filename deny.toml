@@ -1,0 +1,73 @@
+# cargo-deny configuration for supply-chain policy enforcement.
+#
+# Run locally:
+#   cargo deny check              # all checks
+#   cargo deny check advisories   # RustSec advisories only
+#   cargo deny check licenses     # license policy
+#   cargo deny check bans         # banned / duplicate crates
+#   cargo deny check sources      # registry / git source policy
+#
+# CI runs `cargo deny check` across the full feature set. cargo-audit still
+# runs alongside it as a second, advisory-only opinion.
+
+[graph]
+# Leave `targets` unset so every target the crate supports (native, wasm32,
+# iOS, Android, musl, Windows ARM64) is evaluated. Restricting targets here
+# would let a platform-specific advisory or incompatible license slip through
+# on a target we actually ship.
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Yanked crates in the lockfile are a release hazard: deny them outright.
+yanked = "deny"
+# Flag crates flagged unmaintained anywhere in the tree, including transitive
+# dependencies, so we notice rot early.
+unmaintained = "all"
+# Document every ignored advisory with an inline reason. Empty = no exceptions.
+ignore = []
+
+[licenses]
+# Permissive licenses compatible with this crate's MIT OR Apache-2.0 terms.
+# Every entry corresponds to a license actually present in the dependency
+# tree (verified with `cargo deny --all-features list`).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+# Per-crate license overrides. None needed today: the lone LGPL-licensed
+# crate (r-efi) dual-offers MIT OR Apache-2.0, which the allow list satisfies.
+exceptions = []
+
+[licenses.private]
+ignore = false
+
+[bans]
+# Duplicate versions bloat the tree and the binary. Warn rather than deny so a
+# transitive version skew does not block CI, but keep it visible for cleanup.
+multiple-versions = "warn"
+# Wildcard ("*") version requirements pin nothing and are a supply-chain risk.
+wildcards = "deny"
+# Allow a wildcard on path/git deps within the workspace (the fuzz subcrate
+# depends on the parent by path), which are not a supply-chain concern.
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+    # OpenSSL pulls a C toolchain and a large CVE surface. This crate has no
+    # TLS needs; flag any accidental introduction.
+    { name = "openssl" },
+    { name = "openssl-sys" },
+]
+
+[sources]
+# Only crates.io is an expected source. Anything else (private registry,
+# arbitrary git) must be added here deliberately.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

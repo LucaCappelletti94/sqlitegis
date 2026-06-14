@@ -17,6 +17,20 @@ prek run --stage manual --all-files
 
 `prek install` writes a Git `pre-commit` hook that runs the default suite on every commit. The `manual`-stage hooks are gated out of the default run because they require Docker (for the Postgres testcontainer) and a `wasm32-unknown-unknown` target.
 
+## Supply-chain checks
+
+CI runs two dependency gates that you can reproduce locally. They need network access (to fetch the RustSec advisory database) so they are kept out of the default `prek` suite.
+
+```sh
+# RustSec advisories only (CVEs, unsound, unmaintained):
+cargo audit
+
+# Full policy: advisories + license allow-list + banned/duplicate crates + sources.
+cargo deny check --all-features
+```
+
+The cargo-deny policy lives in [`deny.toml`](deny.toml). The license allow-list is intentionally tight (only licenses actually present in the tree), so a dependency update that pulls a new license fails the check and forces a deliberate review.
+
 ## Building the loadable SQLite extension
 
 ```sh

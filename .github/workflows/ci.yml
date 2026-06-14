@@ -208,6 +208,21 @@ jobs:
       - run: cargo install cargo-audit --quiet
       - run: cargo audit
 
+  # Full supply-chain policy enforcement (licenses, banned/duplicate crates,
+  # registry sources) on top of the advisory-only cargo-audit job above. The
+  # policy lives in deny.toml; --all-features so dev and optional dependency
+  # trees are covered too.
+  supply-chain:
+    name: Supply Chain (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
   # README is included verbatim into the crate root docs via
   # include_str! in src/lib.rs, so any relative markdown link there
   # gets resolved against docs.rs/sqlitegis/latest/sqlitegis/ instead
