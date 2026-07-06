@@ -10,8 +10,9 @@ use serde_json::Value;
 
 use crate::core::error::{Result, SqliteGisError};
 use crate::core::ewkb::{
-    ensure_xy_only, extract_srid, is_empty_point_blob, parse_ewkb, parse_ewkb_header,
-    validate_xy_ewkb_payload, write_ewkb, EWKB_M_FLAG, EWKB_Z_FLAG, WKB_POINT,
+    ensure_ewkb_nesting_ok, ensure_xy_only, extract_srid, is_empty_point_blob, parse_ewkb,
+    parse_ewkb_header, validate_xy_ewkb_payload, write_ewkb, EWKB_M_FLAG, EWKB_Z_FLAG,
+    MAX_NESTING_DEPTH, WKB_POINT,
 };
 
 const EMPTY_POINT_GEOJSON: &str = r#"{"type":"Point","coordinates":[]}"#;
@@ -110,8 +111,34 @@ pub fn geom_from_text(wkt: &str, srid: Option<i32>) -> Result<Vec<u8>> {
         let gc = geo::GeometryCollection::new_from(vec![]);
         return write_ewkb(&Geometry::GeometryCollection(gc), srid);
     }
+    ensure_wkt_nesting_ok(wkt)?;
     let geom: Geometry<f64> = geozero::wkt::Wkt(wkt.as_bytes()).to_geo()?;
     write_ewkb(&geom, srid)
+}
+
+/// Reject WKT whose parenthesis nesting exceeds [`MAX_NESTING_DEPTH`]. geozero's
+/// WKT parser recurses per nested `GEOMETRYCOLLECTION` with no bound and
+/// overflows the stack (an uncatchable abort) around depth 5000, so this
+/// up-front cap is the only defense. Parenthesis depth is a conservative proxy.
+// TODO(georust/wkt, no PR yet): root cause is unbounded recursion in the `wkt`
+// crate's `GeometryCollection::from_tokens`. Revisit once fixed upstream.
+fn ensure_wkt_nesting_ok(wkt: &str) -> Result<()> {
+    let mut depth: usize = 0;
+    for byte in wkt.bytes() {
+        match byte {
+            b'(' => {
+                depth += 1;
+                if depth > MAX_NESTING_DEPTH {
+                    return Err(SqliteGisError::InvalidInput(format!(
+                        "WKT nesting exceeds the maximum depth of {MAX_NESTING_DEPTH}"
+                    )));
+                }
+            }
+            b')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Parse ISO WKB bytes (optionally override SRID) into an EWKB blob.
@@ -134,6 +161,7 @@ pub fn geom_from_wkb(wkb: &[u8], srid: Option<i32>) -> Result<Vec<u8>> {
     if is_empty_point_blob(wkb)? {
         return write_ewkb(&Geometry::Point(Point::new(f64::NAN, f64::NAN)), srid);
     }
+    ensure_ewkb_nesting_ok(wkb)?;
     let geom: Geometry<f64> = Ewkb(wkb).to_geo()?;
     write_ewkb(&geom, srid)
 }
@@ -194,6 +222,7 @@ pub fn as_text(blob: &[u8]) -> Result<String> {
     if is_empty_point_blob(blob)? {
         return Ok("POINT EMPTY".to_string());
     }
+    ensure_ewkb_nesting_ok(blob)?;
     Ok(Ewkb(blob).to_wkt()?)
 }
 
@@ -216,6 +245,7 @@ pub fn as_ewkt(blob: &[u8]) -> Result<String> {
         }
         return Ok("POINT EMPTY".to_string());
     }
+    ensure_ewkb_nesting_ok(blob)?;
     let wkt = Ewkb(blob).to_wkt()?;
     if let Some(s) = srid {
         Ok(format!("SRID={s};{wkt}"))
@@ -291,12 +321,36 @@ pub fn as_geojson(blob: &[u8]) -> Result<String> {
     if is_empty_point_blob(blob)? {
         return Ok(EMPTY_POINT_GEOJSON.to_string());
     }
+    ensure_ewkb_nesting_ok(blob)?;
     Ok(Ewkb(blob).to_json()?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn geom_from_text_rejects_deeply_nested_wkt() {
+        // geozero's WKT parser recurses per nested GeometryCollection with no
+        // bound and overflows the stack. A crafted deep string must be rejected
+        // with an error rather than aborting the process.
+        let mut wkt = String::new();
+        for _ in 0..10_000 {
+            wkt.push_str("GEOMETRYCOLLECTION(");
+        }
+        wkt.push_str("POINT(1 2)");
+        for _ in 0..10_000 {
+            wkt.push(')');
+        }
+        assert!(matches!(
+            geom_from_text(&wkt, None),
+            Err(SqliteGisError::InvalidInput(_))
+        ));
+
+        // A shallow GeometryCollection still parses.
+        let ok = geom_from_text("GEOMETRYCOLLECTION(POINT(1 2))", None);
+        assert!(ok.is_ok());
+    }
 
     #[test]
     fn geom_from_wkb_rejects_iso_wkb_z_point() {
