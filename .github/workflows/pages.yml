@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 30
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deploy-1.outputs.page_url || steps.deploy-2.outputs.page_url || steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
 
@@ -77,6 +77,32 @@ jobs:
         with:
           path: _site
 
+      # `actions/deploy-pages@v4` has been intermittently returning
+      # `deployment_failed` from the Pages backend since 2026-07-02 (see
+      # actions/deploy-pages#418). The backend transitions the deployment
+      # to `deployment_failed` unpredictably. Creating a fresh deployment
+      # after a short pause almost always succeeds. Retry twice before we
+      # fail the job.
       - name: Deploy to GitHub Pages
+        id: deploy-1
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Wait before retrying (attempt 2)
+        if: steps.deploy-1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Deploy to GitHub Pages (retry 2)
+        id: deploy-2
+        if: steps.deploy-1.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Wait before retrying (attempt 3)
+        if: steps.deploy-1.outcome == 'failure' && steps.deploy-2.outcome == 'failure'
+        run: sleep 60
+
+      - name: Deploy to GitHub Pages (retry 3)
         id: deployment
+        if: steps.deploy-1.outcome == 'failure' && steps.deploy-2.outcome == 'failure'
         uses: actions/deploy-pages@v4
