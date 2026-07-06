@@ -4,35 +4,14 @@
 //! On native targets also exports the `sqlite3_sqlitegis_init` C entry point
 //! so SQLite can load this library as a loadable extension.
 //!
-//! # Safety contract
+//! # Safety
 //!
-//! All `unsafe` in this module sits behind the SQLite scalar-function ABI and
-//! relies on guarantees SQLite makes to every `xFunc` callback. The audited
-//! invariants are:
-//!
-//! - **Argument vector.** Inside a callback, `argv` points to exactly `n`
-//!   (`= argc`) valid `*mut sqlite3_value` pointers. The catalog registers
-//!   each function with a fixed `n_arg`, so the index helpers (`get_blob`,
-//!   `get_text`, `get_*_arg`) only ever read indices `< n_arg` and never run
-//!   off the end of `argv`.
-//! - **Value lifetime.** Pointers returned by `sqlite3_value_blob` /
-//!   `sqlite3_value_text` are valid only until the callback returns (or until
-//!   another type-coercing accessor is called on the same value). The `&[u8]`
-//!   / `&str` borrows produced here therefore must not escape the callback;
-//!   every result is either copied into an owned `Vec`/`String` or written
-//!   back through `sqlite3_result_*` before the callback returns.
-//! - **Accessor ordering.** `sqlite3_value_bytes` is always called *after*
-//!   `sqlite3_value_blob`/`_text`, because the length read must reflect any
-//!   type coercion the blob/text accessor performed.
-//! - **Panic boundary.** Unwinding across the C ABI is undefined behavior.
-//!   Every `extern "C"` entry point wraps its body in `catch_unwind`
-//!   (`xfunc_guard`, and the two init entry points) and converts a caught
-//!   panic into a SQLite error / error code instead of unwinding.
-//! - **Result encoding.** Lengths handed to `sqlite3_result_blob/_text/_error`
-//!   are range-checked into `c_int` (`checked_c_int_len`); on overflow the
-//!   callback reports an error instead of truncating or wrapping. All result
-//!   buffers are copied by SQLite via `SQLITE_TRANSIENT`, so the Rust-owned
-//!   source may be freed as soon as the setter returns.
+//! All `unsafe` here sits behind the SQLite `xFunc` ABI:
+//! - `argv` holds `argc` valid `*mut sqlite3_value`, and index helpers read only `< n_arg`.
+//! - blob/text borrows live only until the callback returns, so every result is copied out first.
+//! - `sqlite3_value_bytes` is read after `_blob`/`_text` so the length reflects coercion.
+//! - `extern "C"` entry points `catch_unwind`, since unwinding across the ABI is UB.
+//! - result lengths are range-checked into `c_int` via `checked_c_int_len`, buffers copied by `SQLITE_TRANSIENT`.
 
 use super::sqlite_compat::sqlite_transient;
 use super::sqlite_compat::*;
@@ -63,20 +42,16 @@ const DIRECT: c_int = SQLITE_UTF8 | SQLITE_DIRECTONLY_FLAG;
 /// Borrow argument `i` as a blob.
 ///
 /// # Safety
-/// `argv` must be the callback's argument vector and `i < argc`. The returned
-/// slice borrows SQLite-owned memory that is only valid until the callback
-/// returns; the caller must not let it escape. The unbounded lifetime `'a` is
-/// the caller's responsibility to constrain (see the module safety contract).
+/// `i < argc`, and the returned slice must not outlive the callback (see the
+/// module `# Safety`).
 unsafe fn get_blob<'a>(argv: *mut *mut sqlite3_value, i: usize) -> Option<&'a [u8]> {
     unsafe {
         let v = *argv.add(i);
         if sqlite3_value_type(v) == SQLITE_NULL {
             return None;
         }
-        // SAFETY: `sqlite3_value_blob` is called before `sqlite3_value_bytes` so
-        // the length reflects any type coercion. A zero length short-circuits to
-        // an empty slice, so `from_raw_parts` only runs with a non-null `ptr` and
-        // a matching `len` of SQLite-owned, callback-lived bytes.
+        // `_blob` before `_bytes` so `len` reflects coercion. from_raw_parts runs
+        // only with non-null `ptr` (zero len short-circuits above).
         let ptr = sqlite3_value_blob(v) as *const u8;
         let len = sqlite3_value_bytes(v) as usize;
         if len == 0 {
@@ -95,21 +70,16 @@ enum SqlTextArg<'a> {
     InvalidUtf8,
 }
 
-/// Borrow argument `i` as UTF-8 text.
-///
-/// # Safety
-/// Same contract as [`get_blob`]: `i < argc`, and the borrowed `&str` must not
-/// outlive the callback. Non-UTF-8 (or a null pointer) is reported as
-/// `InvalidUtf8` rather than silently lossily decoded.
+/// Borrow argument `i` as UTF-8 text. Same `# Safety` as [`get_blob`]. Non-UTF-8
+/// or a null pointer yields `InvalidUtf8`.
 unsafe fn get_text<'a>(argv: *mut *mut sqlite3_value, i: usize) -> SqlTextArg<'a> {
     unsafe {
         let v = *argv.add(i);
         if sqlite3_value_type(v) == SQLITE_NULL {
             return SqlTextArg::Null;
         }
-        // SAFETY: `sqlite3_value_text` before `sqlite3_value_bytes` for a correct
-        // post-coercion length; a null pointer is rejected before `from_raw_parts`
-        // so the slice always covers `len` SQLite-owned, callback-lived bytes.
+        // `_text` before `_bytes` for a correct post-coercion `len`, null rejected
+        // before from_raw_parts.
         let ptr = sqlite3_value_text(v);
         let len = sqlite3_value_bytes(v) as usize;
         if ptr.is_null() {

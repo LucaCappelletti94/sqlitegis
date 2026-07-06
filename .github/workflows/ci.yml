@@ -210,7 +210,7 @@ jobs:
 
   # Full supply-chain policy enforcement (licenses, banned/duplicate crates,
   # registry sources) on top of the advisory-only cargo-audit job above. The
-  # policy lives in deny.toml; --all-features so dev and optional dependency
+  # policy lives in deny.toml. --all-features so dev and optional dependency
   # trees are covered too.
   supply-chain:
     name: Supply Chain (cargo-deny)

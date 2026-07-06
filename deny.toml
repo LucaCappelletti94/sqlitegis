@@ -59,7 +59,7 @@ allow-wildcard-paths = true
 highlight = "all"
 deny = [
     # OpenSSL pulls a C toolchain and a large CVE surface. This crate has no
-    # TLS needs; flag any accidental introduction.
+    # TLS needs, so flag any accidental introduction.
     { name = "openssl" },
     { name = "openssl-sys" },
 ]
