@@ -50,3 +50,39 @@ pub(crate) fn catch_geo<T>(
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::error::SqliteGisError;
+
+    #[test]
+    fn catch_geo_catches_panic_and_returns_error() {
+        let result: Result<i32, SqliteGisError> = catch_geo("test_label", || {
+            panic!("simulated geo panic");
+        });
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            SqliteGisError::InvalidInput(msg) => {
+                assert!(msg.contains("test_label"));
+                assert!(msg.contains("operation failed on degenerate or invalid geometry"));
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn catch_geo_passes_through_ok_result() {
+        let result = catch_geo("test", || Ok(42));
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn catch_geo_passes_through_err_result() {
+        let result: Result<i32, SqliteGisError> = catch_geo("test", || {
+            Err(SqliteGisError::InvalidInput("inner error".into()))
+        });
+        assert!(result.is_err());
+    }
+}

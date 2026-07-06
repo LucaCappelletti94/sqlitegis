@@ -1865,4 +1865,160 @@ mod tests {
         let combined = concat_multipolygon_bodies(&a, &b).unwrap();
         assert_eq!(poly_count(&combined), 2);
     }
+    // -- Hardening: validate_xy_ewkb_payload geozero decode path (line 173) --
+
+    #[test]
+    fn validate_xy_ewkb_payload_decodes_through_geozero() {
+        // A valid XY point that is NOT empty triggers the geozero decode at line 172-173.
+        let blob = geom_from_text("POINT(5 10)", Some(4326)).unwrap();
+        let hdr = validate_xy_ewkb_payload(&blob).unwrap();
+        assert_eq!(hdr.srid, Some(4326));
+        assert!(!hdr.has_z && !hdr.has_m);
+    }
+
+    // -- Hardening: read_u32_at truncated (lines 448-450) --
+
+    #[test]
+    fn read_u32_at_rejects_truncated_blob() {
+        // Polygon header with no ring count bytes: only 5 bytes total.
+        let blob: Vec<u8> = vec![0x01, 0x03, 0x00, 0x00, 0x00];
+        assert!(validate_ewkb_payload(&blob).is_err());
+    }
+
+    // -- Hardening: advance_past overflow (lines 468-469) --
+
+    #[test]
+    fn advance_past_catches_offset_overflow() {
+        // LineString with u32::MAX point count: count * 16 overflows.
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_LINESTRING.to_le_bytes());
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(validate_ewkb_payload(&blob).is_err());
+    }
+
+    // -- Hardening: validate_nesting nested header truncated (lines 539-541) --
+
+    #[test]
+    fn validate_nesting_rejects_truncated_nested_header() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        assert!(validate_ewkb_payload(&blob).is_err());
+    }
+
+    // -- Hardening: validate_nesting invalid byte-order marker (lines 546-549) --
+
+    #[test]
+    fn validate_nesting_rejects_invalid_nested_byte_order() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.push(0xFF);
+        blob.extend_from_slice(&WKB_POINT.to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        blob.extend_from_slice(&2.0f64.to_le_bytes());
+        assert!(validate_ewkb_payload(&blob).is_err());
+    }
+
+    // -- Hardening: validate_nesting unsupported type (lines 582-585) --
+
+    #[test]
+    fn validate_nesting_rejects_unknown_type_code() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        assert!(validate_ewkb_payload(&blob).is_err());
+    }
+
+    // -- Hardening: validate_nesting nested SRID flag (line 569) --
+
+    #[test]
+    fn validate_nesting_skips_nested_srid() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_GEOMETRYCOLLECTION.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.push(0x01);
+        blob.extend_from_slice(&(WKB_POINT | EWKB_SRID_FLAG).to_le_bytes());
+        blob.extend_from_slice(&4326i32.to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        blob.extend_from_slice(&2.0f64.to_le_bytes());
+        assert!(validate_ewkb_payload(&blob).is_ok());
+    }
+
+    // -- Hardening: walk_for_mbr errors --
+
+    #[test]
+    fn walk_for_mbr_rejects_truncated_nested_header() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        assert!(extract_mbr(&blob).is_err());
+    }
+
+    #[test]
+    fn walk_for_mbr_rejects_invalid_nested_byte_order() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.push(0xFF);
+        blob.extend_from_slice(&WKB_POINT.to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        blob.extend_from_slice(&2.0f64.to_le_bytes());
+        assert!(extract_mbr(&blob).is_err());
+    }
+
+    #[test]
+    fn walk_for_mbr_rejects_unknown_type() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        assert!(extract_mbr(&blob).is_err());
+    }
+
+    // -- Hardening: geometry_type_name for Line, Rect, Triangle --
+
+    #[test]
+    fn geometry_type_name_line() {
+        let line = geo::Line::new(geo::Point::new(0.0, 0.0), geo::Point::new(1.0, 1.0));
+        assert_eq!(geometry_type_name(&geo::Geometry::Line(line)), "Line");
+    }
+
+    #[test]
+    fn geometry_type_name_rect() {
+        let rect = geo::Rect::new(geo::Point::new(0.0, 0.0), geo::Point::new(1.0, 1.0));
+        assert_eq!(geometry_type_name(&geo::Geometry::Rect(rect)), "Rect");
+    }
+
+    #[test]
+    fn geometry_type_name_triangle() {
+        let tri = geo::Triangle::new(
+            geo::Coord { x: 0.0, y: 0.0 },
+            geo::Coord { x: 1.0, y: 0.0 },
+            geo::Coord { x: 0.0, y: 1.0 },
+        );
+        assert_eq!(
+            geometry_type_name(&geo::Geometry::Triangle(tri)),
+            "Triangle"
+        );
+    }
+
+    // -- Hardening: type consistency in Multi* containers --
+
+    #[test]
+    fn validate_nesting_rejects_type_inconsistent_multipoint() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.push(0x01);
+        blob.extend_from_slice(&WKB_LINESTRING.to_le_bytes());
+        blob.extend_from_slice(&2u32.to_le_bytes());
+        blob.extend_from_slice(&0.0f64.to_le_bytes());
+        blob.extend_from_slice(&0.0f64.to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        let err = validate_ewkb_payload(&blob).unwrap_err();
+        let err_str = format!("{err}");
+        assert!(
+            err_str.contains("wrong type"),
+            "unexpected error: {err_str}"
+        );
+    }
 }

@@ -937,4 +937,33 @@ mod tests {
         let err = st_length_sphere(&poly).expect_err("polygon input must error");
         assert!(format!("{err}").contains("LineString or MultiLineString"));
     }
+
+    #[test]
+    fn st_distance_sphere_second_point_bad_latitude() {
+        // Exercises parse_two_geographic_points line 362-365: require_geographic_latitude
+        // on the second point (pb path).
+        let valid = st_point(0.0, 0.0, Some(4326)).unwrap();
+        let bad = st_point(0.0, 100.0, Some(4326)).unwrap();
+        let err = st_distance_sphere(&valid, &bad).expect_err("bad latitude must error");
+        assert!(
+            format!("{err}").contains("latitude"),
+            "expected latitude error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn st_closest_point_nan_geometry_errors_at_parse() {
+        // NaN coordinates are rejected by reject_non_finite_coords in parse_ewkb,
+        // so they never reach the closest_point algorithm. The Indeterminate
+        // path (lines 518-520) is defensive code for geometries that geo's
+        // algorithm cannot resolve, but no known finite non-empty geometry
+        // triggers it in practice.
+        let nan_poly = nan_ring_polygon();
+        let pt = st_point(0.0, 0.0, None).unwrap();
+        let err = st_closest_point(&nan_poly, &pt).expect_err("NaN geometry must error");
+        assert!(
+            format!("{err}").contains("non-finite"),
+            "expected non-finite error, got: {err}"
+        );
+    }
 }

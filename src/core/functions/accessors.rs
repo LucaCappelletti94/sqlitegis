@@ -1172,4 +1172,35 @@ mod tests {
         assert_ne!(reason, "Valid Geometry");
         assert!(!reason.is_empty());
     }
+    // -- Coverage gap tests ----------------------------------------
+
+    #[test]
+    fn st_z_truncated_z_payload() {
+        // Z flag set but blob only contains XY, no Z bytes.
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&(WKB_POINT | EWKB_Z_FLAG).to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        blob.extend_from_slice(&2.0f64.to_le_bytes());
+        let err = st_z(&blob).expect_err("truncated Z blob must error");
+        assert!(format!("{err}").contains("truncated") || format!("{err}").contains("EWKB"));
+    }
+
+    #[test]
+    fn st_npoints_line_returns_2() {
+        use geo::Point;
+        let line = geo::Line::new(Point::new(0.0, 0.0), Point::new(1.0, 1.0));
+        let blob = write_ewkb(&Geometry::Line(line), None).unwrap();
+        assert_eq!(st_npoints(&blob).unwrap(), 2);
+    }
+
+    #[test]
+    fn st_is_valid_reason_generic_invalid() {
+        // Self-intersecting bowtie polygon. is_valid() returns false.
+        // check_validation() may or may not produce typed reasons.
+        // Either way we get a non-empty invalid message.
+        let bowtie = geom_from_text("POLYGON((0 0,10 10,10 0,0 10,0 0))", None).unwrap();
+        let reason = st_is_valid_reason(&bowtie).unwrap();
+        assert_ne!(reason, "Valid Geometry");
+        assert!(!reason.is_empty());
+    }
 }

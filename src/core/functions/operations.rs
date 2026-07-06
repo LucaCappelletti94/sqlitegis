@@ -865,4 +865,57 @@ mod tests {
         assert_eq!(st_geometry_type(&r).unwrap(), "ST_MultiLineString");
         let _ = (poly_a, poly_b);
     }
+    #[test]
+    fn intersection_multipoint_multipoint_shared_point() {
+        let a = geom_from_text("MULTIPOINT((0 0),(1 1))", None).unwrap();
+        let b = geom_from_text("MULTIPOINT((1 1),(2 2))", None).unwrap();
+        let r = st_intersection(&a, &b).unwrap();
+        assert_eq!(as_text(&r).unwrap(), "POINT(1 1)");
+    }
+
+    #[test]
+    fn intersection_parallel_linestrings_no_intersection() {
+        let a = geom_from_text("LINESTRING(0 0,0 10)", None).unwrap();
+        let b = geom_from_text("LINESTRING(1 0,1 10)", None).unwrap();
+        let r = st_intersection(&a, &b).unwrap();
+        assert!(st_is_empty(&r).unwrap());
+    }
+
+    #[test]
+    fn union_overlapping_slow_path() {
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((1 1,3 1,3 3,1 3,1 1))", None).unwrap();
+        let u = st_union(&a, &b).unwrap();
+        assert!((st_area(&u).unwrap() - 7.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn sym_difference_overlapping_slow_path() {
+        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
+        let b = geom_from_text("POLYGON((1 0,3 0,3 2,1 2,1 0))", None).unwrap();
+        let sd = st_sym_difference(&a, &b).unwrap();
+        assert!((st_area(&sd).unwrap() - 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn buffer_negative_large_distance_empty_result() {
+        let poly = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        let result = st_buffer(&poly, -10.0).unwrap();
+        assert_eq!(st_geometry_type(&result).unwrap(), "ST_Polygon");
+        assert!(st_is_empty(&result).unwrap());
+    }
+
+    #[test]
+    fn intersection_geometrycollection_mixed_point_and_polygon() {
+        let gc = geom_from_text(
+            "GEOMETRYCOLLECTION(POINT(0.5 0.5), POLYGON((0 0,1 0,1 1,0 1,0 0)))",
+            None,
+        )
+        .unwrap();
+        let r = st_intersection(&gc, &gc).unwrap();
+        assert_eq!(st_geometry_type(&r).unwrap(), "ST_GeometryCollection");
+        let text = as_text(&r).unwrap();
+        assert!(text.contains("POINT(0.5 0.5)"), "actual: {text}");
+        assert!(text.contains("POLYGON"), "actual: {text}");
+    }
 }
