@@ -303,16 +303,18 @@ fn pack(bag: GeometryBag) -> Geometry<f64> {
 /// assert!((st_area(&u).unwrap() - 6.0).abs() < 1e-10);
 /// ```
 pub fn st_union(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
-    // MBR-only fastpath. If both bboxes exist and are disjoint, the
-    // union is simply the concatenation of both polygon lists. We splice
-    // the input EWKB bytes directly without decoding, which is several
-    // times faster than the decode + Vec + serialize path.
-    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
-        if !ra.intersects(&rb) {
-            return concat_multipolygon_bodies(a, b);
+    super::catch_geo("ST_Union", || {
+        // MBR-only fastpath. If both bboxes exist and are disjoint, the
+        // union is simply the concatenation of both polygon lists. We splice
+        // the input EWKB bytes directly without decoding, which is several
+        // times faster than the decode + Vec + serialize path.
+        if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+            if !ra.intersects(&rb) {
+                return concat_multipolygon_bodies(a, b);
+            }
         }
-    }
-    binary_polygon_op(a, b, |ma, mb| ma.union(mb))
+        binary_polygon_op(a, b, |ma, mb| ma.union(mb))
+    })
 }
 
 /// ST_Intersection: compute the geometric intersection of two geometries.
@@ -360,19 +362,21 @@ pub fn st_union(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
 /// assert_eq!(as_text(&r).unwrap(), "POINT(1 1)");
 /// ```
 pub fn st_intersection(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
-    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
-        if !ra.intersects(&rb) {
-            let empty = Geometry::GeometryCollection(GeometryCollection::new_from(vec![]));
-            return write_ewkb(&empty, extract_srid(a));
+    super::catch_geo("ST_Intersection", || {
+        if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+            if !ra.intersects(&rb) {
+                let empty = Geometry::GeometryCollection(GeometryCollection::new_from(vec![]));
+                return write_ewkb(&empty, extract_srid(a));
+            }
         }
-    }
-    let (ga, gb, srid) = parse_ewkb_pair(a, b)?;
-    let mut bag_a = GeometryBag::new();
-    let mut bag_b = GeometryBag::new();
-    decompose_into(ga, &mut bag_a)?;
-    decompose_into(gb, &mut bag_b)?;
-    let result = intersect_bags(&bag_a, &bag_b);
-    write_ewkb(&pack(result), srid)
+        let (ga, gb, srid) = parse_ewkb_pair(a, b)?;
+        let mut bag_a = GeometryBag::new();
+        let mut bag_b = GeometryBag::new();
+        decompose_into(ga, &mut bag_a)?;
+        decompose_into(gb, &mut bag_b)?;
+        let result = intersect_bags(&bag_a, &bag_b);
+        write_ewkb(&pack(result), srid)
+    })
 }
 
 /// ST_Difference: compute the geometric difference (A minus B) of two polygon geometries.
@@ -390,7 +394,9 @@ pub fn st_intersection(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
 /// assert!((st_area(&d).unwrap() - 2.0).abs() < 1e-10);
 /// ```
 pub fn st_difference(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
-    binary_polygon_op(a, b, |ma, mb| ma.difference(mb))
+    super::catch_geo("ST_Difference", || {
+        binary_polygon_op(a, b, |ma, mb| ma.difference(mb))
+    })
 }
 
 /// ST_SymDifference: compute the symmetric difference (XOR) of two polygon geometries.
@@ -408,15 +414,17 @@ pub fn st_difference(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
 /// assert!((st_area(&sd).unwrap() - 4.0).abs() < 1e-10);
 /// ```
 pub fn st_sym_difference(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
-    // MBR-only fastpath. Symmetric difference of disjoint geometries is
-    // their union (XOR of non-overlapping sets is the full pair). Same
-    // bytes-only splice as `st_union`.
-    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
-        if !ra.intersects(&rb) {
-            return concat_multipolygon_bodies(a, b);
+    super::catch_geo("ST_SymDifference", || {
+        // MBR-only fastpath. Symmetric difference of disjoint geometries is
+        // their union (XOR of non-overlapping sets is the full pair). Same
+        // bytes-only splice as `st_union`.
+        if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+            if !ra.intersects(&rb) {
+                return concat_multipolygon_bodies(a, b);
+            }
         }
-    }
-    binary_polygon_op(a, b, |ma, mb| ma.xor(mb))
+        binary_polygon_op(a, b, |ma, mb| ma.xor(mb))
+    })
 }
 
 /// ST_Buffer: expand or shrink a geometry by a given distance.
@@ -435,26 +443,28 @@ pub fn st_sym_difference(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
 /// assert!((area - std::f64::consts::PI).abs() < 0.1);
 /// ```
 pub fn st_buffer(blob: &[u8], distance: f64) -> Result<Vec<u8>> {
-    let (geom, srid) = parse_ewkb(blob)?;
-    if is_empty_geometry(&geom) {
-        let empty = Geometry::Polygon(geo::Polygon::new(geo::LineString::new(vec![]), vec![]));
-        return write_ewkb(&empty, srid);
-    }
-    let result = geom.buffer(distance);
-    let mut polygons = result.0;
-    let out_geom = match polygons.len() {
-        0 => Geometry::Polygon(geo::Polygon::new(geo::LineString::new(vec![]), vec![])),
-        1 => {
-            let polygon = polygons.pop().ok_or_else(|| {
-                SqliteGisError::InvalidInput(
-                    "buffer result unexpectedly missing single polygon".to_string(),
-                )
-            })?;
-            Geometry::Polygon(polygon)
+    super::catch_geo("ST_Buffer", || {
+        let (geom, srid) = parse_ewkb(blob)?;
+        if is_empty_geometry(&geom) {
+            let empty = Geometry::Polygon(geo::Polygon::new(geo::LineString::new(vec![]), vec![]));
+            return write_ewkb(&empty, srid);
         }
-        _ => Geometry::MultiPolygon(MultiPolygon::new(polygons)),
-    };
-    write_ewkb(&out_geom, srid)
+        let result = geom.buffer(distance);
+        let mut polygons = result.0;
+        let out_geom = match polygons.len() {
+            0 => Geometry::Polygon(geo::Polygon::new(geo::LineString::new(vec![]), vec![])),
+            1 => {
+                let polygon = polygons.pop().ok_or_else(|| {
+                    SqliteGisError::InvalidInput(
+                        "buffer result unexpectedly missing single polygon".to_string(),
+                    )
+                })?;
+                Geometry::Polygon(polygon)
+            }
+            _ => Geometry::MultiPolygon(MultiPolygon::new(polygons)),
+        };
+        write_ewkb(&out_geom, srid)
+    })
 }
 
 #[cfg(test)]
@@ -463,7 +473,31 @@ mod tests {
     use crate::core::functions::accessors::{st_geometry_type, st_is_empty};
     use crate::core::functions::constructors::st_point;
     use crate::core::functions::io::geom_from_text;
-    use crate::core::functions::measurement::st_area;
+    use crate::core::functions::measurement::{st_area, st_point_on_surface};
+
+    /// Fuzzer-reduced degenerate-but-finite polygon that makes `i_overlay` and
+    /// geo's sweeps `assert!` and abort. The guard must turn that into an error.
+    const DEGENERATE_POLYGON: &[u8] = &[
+        1, 3, 0, 0, 0, 6, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 229, 129, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 129, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 129, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 229, 229, 229,
+        229, 229, 229, 229, 229, 77, 229, 229, 28, 229, 229, 229, 229, 229, 229, 229, 229,
+    ];
+
+    /// Every op must return, never abort, on the degenerate polygon above.
+    #[test]
+    fn degenerate_geometry_never_panics() {
+        let g = DEGENERATE_POLYGON;
+        let _ = st_buffer(g, 1.0);
+        let _ = st_union(g, g);
+        let _ = st_intersection(g, g);
+        let _ = st_difference(g, g);
+        let _ = st_sym_difference(g, g);
+        let _ = st_point_on_surface(g);
+    }
 
     #[test]
     fn union_overlapping() {

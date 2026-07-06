@@ -634,8 +634,10 @@ pub fn st_envelope(blob: &[u8]) -> Result<Vec<u8>> {
 /// assert!(st_is_valid(&blob).unwrap());
 /// ```
 pub fn st_is_valid(blob: &[u8]) -> Result<bool> {
-    let (geom, _) = parse_ewkb(blob)?;
-    Ok(geom.is_valid())
+    crate::core::functions::catch_geo("ST_IsValid", || {
+        let (geom, _) = parse_ewkb(blob)?;
+        Ok(geom.is_valid())
+    })
 }
 
 /// ST_IsValidReason: human-readable validity report.
@@ -650,21 +652,23 @@ pub fn st_is_valid(blob: &[u8]) -> Result<bool> {
 /// assert_eq!(st_is_valid_reason(&blob).unwrap(), "Valid Geometry");
 /// ```
 pub fn st_is_valid_reason(blob: &[u8]) -> Result<String> {
-    let (geom, _) = parse_ewkb(blob)?;
-    if geom.is_valid() {
-        Ok("Valid Geometry".to_string())
-    } else {
-        // geo's Validation trait gives typed errors. Collect them
-        let mut reasons = Vec::new();
-        if let Err(e) = geom.check_validation() {
-            reasons.push(format!("{e}"));
-        }
-        Ok(if reasons.is_empty() {
-            "Invalid geometry".to_string()
+    crate::core::functions::catch_geo("ST_IsValidReason", || {
+        let (geom, _) = parse_ewkb(blob)?;
+        if geom.is_valid() {
+            Ok("Valid Geometry".to_string())
         } else {
-            reasons.join("; ")
-        })
-    }
+            // geo's Validation trait gives typed errors. Collect them
+            let mut reasons = Vec::new();
+            if let Err(e) = geom.check_validation() {
+                reasons.push(format!("{e}"));
+            }
+            Ok(if reasons.is_empty() {
+                "Invalid geometry".to_string()
+            } else {
+                reasons.join("; ")
+            })
+        }
+    })
 }
 
 #[cfg(test)]

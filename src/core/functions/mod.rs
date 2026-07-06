@@ -32,3 +32,21 @@ pub mod io;
 pub mod measurement;
 pub mod operations;
 pub mod predicates;
+
+/// Turn a panic from `geo` or `i_overlay` (both `assert!` on degenerate finite
+/// geometry) into an error, so a hostile blob cannot abort the process and the
+/// never-panic contract holds for direct callers past the FFI `xfunc_guard`.
+// TODO(georust/geo#1552, #1554, #1555, #1556 plus the i_overlay aborts): drop
+// once all are fixed and released.
+pub(crate) fn catch_geo<T>(
+    label: &str,
+    f: impl FnOnce() -> crate::core::error::Result<T>,
+) -> crate::core::error::Result<T> {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(_) => Err(crate::core::error::SqliteGisError::InvalidInput(format!(
+            "{label}: operation failed on degenerate or invalid geometry"
+        ))),
+    }
+}
