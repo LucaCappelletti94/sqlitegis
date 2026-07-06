@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-version:
+    name: Verify tag matches version
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check tag against Cargo.toml version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          echo "tag version: $tag"
+          echo "manifest version: $manifest"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag $tag does not match Cargo.toml version $manifest"
+            exit 1
+          fi
+
+  ci-green:
+    name: CI is green on main
+    runs-on: ubuntu-latest
+    needs: verify-version
+
+    steps:
+      - name: Check latest CI run on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion="$(gh api repos/${{ github.repository }}/actions/workflows/ci.yml/runs \
+            --jq '.workflow_runs[0].conclusion' \
+            -f branch=main -f per_page=1)"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::Latest CI run on main has conclusion '$conclusion'. CI must be green before releasing."
+            exit 1
+          fi
+          echo "CI on main is green."
+
+  publish:
+    name: Publish to crates.io
+    needs: ci-green
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Authenticate to crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish crate
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
