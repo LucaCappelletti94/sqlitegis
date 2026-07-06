@@ -17,6 +17,9 @@ permissions:
   pages: write
   id-token: write
 
+env:
+  ACTIONS_RUNNER_NODE_VERSION: 24
+
 jobs:
   build-and-deploy:
     name: Build web demo and deploy to GitHub Pages
