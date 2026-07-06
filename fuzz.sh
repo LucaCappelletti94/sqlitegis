@@ -6,7 +6,18 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGETS=(
     fuzz_union_disjoint
     fuzz_sym_difference_disjoint
+    fuzz_ewkb_decode
+    fuzz_mbr_differential
+    fuzz_text_parsers
+    fuzz_geodesic
 )
+
+# The GEOS differential target links against system libgeos (libgeos-dev). Add
+# it only when that library is present so the script still runs on machines
+# without it, rather than failing to compile one pane.
+if pkg-config --exists geos 2>/dev/null || command -v geos-config >/dev/null 2>&1; then
+    TARGETS+=(fuzz_geos_differential)
+fi
 
 # libFuzzer runtime knobs (passed after `--` to cargo-fuzz):
 #   -timeout=15        abort a single input after 15s. Generous headroom

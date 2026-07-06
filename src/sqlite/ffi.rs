@@ -3,6 +3,15 @@
 //! Registers all SQLiteGIS functions on a raw `*mut sqlite3` handle.
 //! On native targets also exports the `sqlite3_sqlitegis_init` C entry point
 //! so SQLite can load this library as a loadable extension.
+//!
+//! # Safety
+//!
+//! All `unsafe` here sits behind the SQLite `xFunc` ABI:
+//! - `argv` holds `argc` valid `*mut sqlite3_value`, and index helpers read only `< n_arg`.
+//! - blob/text borrows live only until the callback returns, so every result is copied out first.
+//! - `sqlite3_value_bytes` is read after `_blob`/`_text` so the length reflects coercion.
+//! - `extern "C"` entry points `catch_unwind`, since unwinding across the ABI is UB.
+//! - result lengths are range-checked into `c_int` via `checked_c_int_len`, buffers copied by `SQLITE_TRANSIENT`.
 
 use super::sqlite_compat::sqlite_transient;
 use super::sqlite_compat::*;
@@ -30,20 +39,29 @@ const DIRECT: c_int = SQLITE_UTF8 | SQLITE_DIRECTONLY_FLAG;
 
 // Argument-extraction helpers
 
+/// Borrow argument `i` as a blob.
+///
+/// # Safety
+/// `i < argc`, and the returned slice must not outlive the callback (see the
+/// module `# Safety`).
 unsafe fn get_blob<'a>(argv: *mut *mut sqlite3_value, i: usize) -> Option<&'a [u8]> {
-    let v = *argv.add(i);
-    if sqlite3_value_type(v) == SQLITE_NULL {
-        return None;
+    unsafe {
+        let v = *argv.add(i);
+        if sqlite3_value_type(v) == SQLITE_NULL {
+            return None;
+        }
+        // `_blob` before `_bytes` so `len` reflects coercion. from_raw_parts runs
+        // only with non-null `ptr` (zero len short-circuits above).
+        let ptr = sqlite3_value_blob(v) as *const u8;
+        let len = sqlite3_value_bytes(v) as usize;
+        if len == 0 {
+            return Some(&[]);
+        }
+        if ptr.is_null() {
+            return None;
+        }
+        Some(std::slice::from_raw_parts(ptr, len))
     }
-    let ptr = sqlite3_value_blob(v) as *const u8;
-    let len = sqlite3_value_bytes(v) as usize;
-    if len == 0 {
-        return Some(&[]);
-    }
-    if ptr.is_null() {
-        return None;
-    }
-    Some(std::slice::from_raw_parts(ptr, len))
 }
 
 enum SqlTextArg<'a> {
@@ -52,19 +70,25 @@ enum SqlTextArg<'a> {
     InvalidUtf8,
 }
 
+/// Borrow argument `i` as UTF-8 text. Same `# Safety` as [`get_blob`]. Non-UTF-8
+/// or a null pointer yields `InvalidUtf8`.
 unsafe fn get_text<'a>(argv: *mut *mut sqlite3_value, i: usize) -> SqlTextArg<'a> {
-    let v = *argv.add(i);
-    if sqlite3_value_type(v) == SQLITE_NULL {
-        return SqlTextArg::Null;
-    }
-    let ptr = sqlite3_value_text(v);
-    let len = sqlite3_value_bytes(v) as usize;
-    if ptr.is_null() {
-        return SqlTextArg::InvalidUtf8;
-    }
-    match std::str::from_utf8(std::slice::from_raw_parts(ptr as _, len)) {
-        Ok(s) => SqlTextArg::Value(s),
-        Err(_) => SqlTextArg::InvalidUtf8,
+    unsafe {
+        let v = *argv.add(i);
+        if sqlite3_value_type(v) == SQLITE_NULL {
+            return SqlTextArg::Null;
+        }
+        // `_text` before `_bytes` for a correct post-coercion `len`, null rejected
+        // before from_raw_parts.
+        let ptr = sqlite3_value_text(v);
+        let len = sqlite3_value_bytes(v) as usize;
+        if ptr.is_null() {
+            return SqlTextArg::InvalidUtf8;
+        }
+        match std::str::from_utf8(std::slice::from_raw_parts(ptr as _, len)) {
+            Ok(s) => SqlTextArg::Value(s),
+            Err(_) => SqlTextArg::InvalidUtf8,
+        }
     }
 }
 
@@ -82,26 +106,30 @@ enum SqlI32Arg {
 }
 
 unsafe fn get_f64_arg(argv: *mut *mut sqlite3_value, i: usize) -> SqlArg<f64> {
-    let v = *argv.add(i);
-    match sqlite3_value_type(v) {
-        SQLITE_NULL => SqlArg::Null,
-        SQLITE_INTEGER | SQLITE_FLOAT => SqlArg::Value(sqlite3_value_double(v)),
-        _ => SqlArg::InvalidType,
+    unsafe {
+        let v = *argv.add(i);
+        match sqlite3_value_type(v) {
+            SQLITE_NULL => SqlArg::Null,
+            SQLITE_INTEGER | SQLITE_FLOAT => SqlArg::Value(sqlite3_value_double(v)),
+            _ => SqlArg::InvalidType,
+        }
     }
 }
 
 unsafe fn get_i32_arg(argv: *mut *mut sqlite3_value, i: usize) -> SqlI32Arg {
-    let v = *argv.add(i);
-    match sqlite3_value_type(v) {
-        SQLITE_NULL => SqlI32Arg::Null,
-        SQLITE_INTEGER => {
-            let raw = sqlite3_value_int64(v);
-            match i32::try_from(raw) {
-                Ok(value) => SqlI32Arg::Value(value),
-                Err(_) => SqlI32Arg::OutOfRange(raw),
+    unsafe {
+        let v = *argv.add(i);
+        match sqlite3_value_type(v) {
+            SQLITE_NULL => SqlI32Arg::Null,
+            SQLITE_INTEGER => {
+                let raw = sqlite3_value_int64(v);
+                match i32::try_from(raw) {
+                    Ok(value) => SqlI32Arg::Value(value),
+                    Err(_) => SqlI32Arg::OutOfRange(raw),
+                }
             }
+            _ => SqlI32Arg::InvalidType,
         }
-        _ => SqlI32Arg::InvalidType,
     }
 }
 
@@ -115,52 +143,68 @@ const ERROR_MSG_TOO_LARGE: &str = "internal error: error message too large";
 const PANIC_IN_CALLBACK_MSG: &str = "panic in SQLite callback";
 
 unsafe fn set_blob(ctx: *mut sqlite3_context, data: &[u8]) {
-    let Some(len) = checked_c_int_len(data.len()) else {
-        set_error(ctx, "internal error: BLOB result too large");
-        return;
-    };
-    sqlite3_result_blob(ctx, data.as_ptr().cast(), len, sqlite_transient());
+    unsafe {
+        let Some(len) = checked_c_int_len(data.len()) else {
+            set_error(ctx, "internal error: BLOB result too large");
+            return;
+        };
+        sqlite3_result_blob(ctx, data.as_ptr().cast(), len, sqlite_transient());
+    }
 }
 
 unsafe fn set_text(ctx: *mut sqlite3_context, s: &str) {
-    let Some(len) = checked_c_int_len(s.len()) else {
-        set_error(ctx, "internal error: text result too large");
-        return;
-    };
-    sqlite3_result_text(ctx, s.as_ptr().cast(), len, sqlite_transient());
+    unsafe {
+        let Some(len) = checked_c_int_len(s.len()) else {
+            set_error(ctx, "internal error: text result too large");
+            return;
+        };
+        sqlite3_result_text(ctx, s.as_ptr().cast(), len, sqlite_transient());
+    }
 }
 
 unsafe fn set_f64(ctx: *mut sqlite3_context, v: f64) {
-    sqlite3_result_double(ctx, v);
+    unsafe {
+        sqlite3_result_double(ctx, v);
+    }
 }
 unsafe fn set_i64(ctx: *mut sqlite3_context, v: i64) {
-    sqlite3_result_int64(ctx, v);
+    unsafe {
+        sqlite3_result_int64(ctx, v);
+    }
 }
 unsafe fn set_i32(ctx: *mut sqlite3_context, v: i32) {
-    sqlite3_result_int(ctx, v);
+    unsafe {
+        sqlite3_result_int(ctx, v);
+    }
 }
 unsafe fn set_null(ctx: *mut sqlite3_context) {
-    sqlite3_result_null(ctx);
+    unsafe {
+        sqlite3_result_null(ctx);
+    }
 }
 
 unsafe fn set_error(ctx: *mut sqlite3_context, msg: &str) {
-    if let Some(len) = checked_c_int_len(msg.len()) {
-        sqlite3_result_error(ctx, msg.as_ptr().cast(), len);
-        return;
-    }
+    unsafe {
+        if let Some(len) = checked_c_int_len(msg.len()) {
+            sqlite3_result_error(ctx, msg.as_ptr().cast(), len);
+            return;
+        }
 
-    let len = c_int::try_from(ERROR_MSG_TOO_LARGE.len())
-        .expect("fallback error length must fit in c_int");
-    sqlite3_result_error(ctx, ERROR_MSG_TOO_LARGE.as_ptr().cast(), len);
+        let len = c_int::try_from(ERROR_MSG_TOO_LARGE.len())
+            .expect("fallback error length must fit in c_int");
+        sqlite3_result_error(ctx, ERROR_MSG_TOO_LARGE.as_ptr().cast(), len);
+    }
 }
 
 unsafe fn xfunc_guard<F>(ctx: *mut sqlite3_context, label: &str, f: F)
 where
     F: FnOnce(),
 {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-    if result.is_err() {
-        set_error(ctx, &format!("{label}: {PANIC_IN_CALLBACK_MSG}"));
+    unsafe {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        if result.is_err() {
+            set_error(ctx, &format!("{label}: {PANIC_IN_CALLBACK_MSG}"));
+        }
     }
 }
 
@@ -171,15 +215,17 @@ unsafe fn require_f64_arg(
     fn_name: &str,
     arg_name: &str,
 ) -> Option<f64> {
-    match get_f64_arg(argv, i) {
-        SqlArg::Value(v) => Some(v),
-        SqlArg::Null => {
-            set_null(ctx);
-            None
-        }
-        SqlArg::InvalidType => {
-            set_error(ctx, &format!("{fn_name}: {arg_name} must be numeric"));
-            None
+    unsafe {
+        match get_f64_arg(argv, i) {
+            SqlArg::Value(v) => Some(v),
+            SqlArg::Null => {
+                set_null(ctx);
+                None
+            }
+            SqlArg::InvalidType => {
+                set_error(ctx, &format!("{fn_name}: {arg_name} must be numeric"));
+                None
+            }
         }
     }
 }
@@ -191,22 +237,24 @@ unsafe fn require_i32_arg(
     fn_name: &str,
     arg_name: &str,
 ) -> Option<i32> {
-    match get_i32_arg(argv, i) {
-        SqlI32Arg::Value(v) => Some(v),
-        SqlI32Arg::Null => {
-            set_null(ctx);
-            None
-        }
-        SqlI32Arg::InvalidType => {
-            set_error(ctx, &format!("{fn_name}: {arg_name} must be integer"));
-            None
-        }
-        SqlI32Arg::OutOfRange(v) => {
-            set_error(
-                ctx,
-                &format!("{fn_name}: {arg_name} out of range for i32: {v}"),
-            );
-            None
+    unsafe {
+        match get_i32_arg(argv, i) {
+            SqlI32Arg::Value(v) => Some(v),
+            SqlI32Arg::Null => {
+                set_null(ctx);
+                None
+            }
+            SqlI32Arg::InvalidType => {
+                set_error(ctx, &format!("{fn_name}: {arg_name} must be integer"));
+                None
+            }
+            SqlI32Arg::OutOfRange(v) => {
+                set_error(
+                    ctx,
+                    &format!("{fn_name}: {arg_name} out of range for i32: {v}"),
+                );
+                None
+            }
         }
     }
 }
@@ -218,29 +266,33 @@ unsafe fn require_text_arg<'a>(
     fn_name: &str,
     arg_name: &str,
 ) -> Option<&'a str> {
-    match get_text(argv, i) {
-        SqlTextArg::Value(v) => Some(v),
-        SqlTextArg::Null => {
-            set_null(ctx);
-            None
-        }
-        SqlTextArg::InvalidUtf8 => {
-            set_error(
-                ctx,
-                &format!("{fn_name}: {arg_name} must be valid UTF-8 text"),
-            );
-            None
+    unsafe {
+        match get_text(argv, i) {
+            SqlTextArg::Value(v) => Some(v),
+            SqlTextArg::Null => {
+                set_null(ctx);
+                None
+            }
+            SqlTextArg::InvalidUtf8 => {
+                set_error(
+                    ctx,
+                    &format!("{fn_name}: {arg_name} must be valid UTF-8 text"),
+                );
+                None
+            }
         }
     }
 }
 
 unsafe fn any_arg_is_null(argv: *mut *mut sqlite3_value, arg_count: usize) -> bool {
-    for i in 0..arg_count {
-        if sqlite3_value_type(*argv.add(i)) == SQLITE_NULL {
-            return true;
+    unsafe {
+        for i in 0..arg_count {
+            if sqlite3_value_type(*argv.add(i)) == SQLITE_NULL {
+                return true;
+            }
         }
+        false
     }
-    false
 }
 
 unsafe fn optional_srid_arg(
@@ -250,24 +302,32 @@ unsafe fn optional_srid_arg(
     index: usize,
     fn_name: &str,
 ) -> Option<Option<i32>> {
-    if with_srid {
-        let srid = require_i32_arg(ctx, argv, index, fn_name, "srid")?;
-        Some(Some(srid))
-    } else {
-        Some(None)
+    unsafe {
+        if with_srid {
+            let srid = require_i32_arg(ctx, argv, index, fn_name, "srid")?;
+            Some(Some(srid))
+        } else {
+            Some(None)
+        }
     }
 }
 
 // Convenience setter wrappers
 
 unsafe fn set_bool(ctx: *mut sqlite3_context, v: bool) {
-    set_i32(ctx, v as i32);
+    unsafe {
+        set_i32(ctx, v as i32);
+    }
 }
 unsafe fn set_blob_owned(ctx: *mut sqlite3_context, v: Vec<u8>) {
-    set_blob(ctx, &v);
+    unsafe {
+        set_blob(ctx, &v);
+    }
 }
 unsafe fn set_text_owned(ctx: *mut sqlite3_context, v: impl AsRef<str>) {
-    set_text(ctx, v.as_ref());
+    unsafe {
+        set_text(ctx, v.as_ref());
+    }
 }
 
 // Callback macros
@@ -294,7 +354,9 @@ macro_rules! xfunc_decl {
             _n: c_int,
             $argv: *mut *mut sqlite3_value,
         ) {
-            xfunc_guard($ctx, $label, || $body);
+            unsafe {
+                xfunc_guard($ctx, $label, || $body);
+            }
         }
     };
 }
@@ -536,15 +598,17 @@ unsafe extern "C" fn st_geomfromgeojson_xfunc(
     _n: c_int,
     argv: *mut *mut sqlite3_value,
 ) {
-    xfunc_guard(ctx, "ST_GeomFromGeoJSON", || {
-        let Some(json) = require_text_arg(ctx, argv, 0, "ST_GeomFromGeoJSON", "json") else {
-            return;
-        };
-        match geom_from_geojson(json, None) {
-            Ok(v) => set_blob(ctx, &v),
-            Err(e) => set_error(ctx, &format!("ST_GeomFromGeoJSON: {e}")),
-        }
-    });
+    unsafe {
+        xfunc_guard(ctx, "ST_GeomFromGeoJSON", || {
+            let Some(json) = require_text_arg(ctx, argv, 0, "ST_GeomFromGeoJSON", "json") else {
+                return;
+            };
+            match geom_from_geojson(json, None) {
+                Ok(v) => set_blob(ctx, &v),
+                Err(e) => set_error(ctx, &format!("ST_GeomFromGeoJSON: {e}")),
+            }
+        });
+    }
 }
 
 xfunc_blob!(st_astext_xfunc, "ST_AsText", as_text, set_text_owned);
@@ -561,25 +625,27 @@ xfunc_blob!(
 // Constructor callbacks
 
 unsafe fn st_point_impl(ctx: *mut sqlite3_context, argv: *mut *mut sqlite3_value, with_srid: bool) {
-    let arg_count = if with_srid { 3 } else { 2 };
-    if any_arg_is_null(argv, arg_count) {
-        set_null(ctx);
-        return;
-    }
+    unsafe {
+        let arg_count = if with_srid { 3 } else { 2 };
+        if any_arg_is_null(argv, arg_count) {
+            set_null(ctx);
+            return;
+        }
 
-    let Some(x) = require_f64_arg(ctx, argv, 0, "ST_Point", "x") else {
-        return;
-    };
-    let Some(y) = require_f64_arg(ctx, argv, 1, "ST_Point", "y") else {
-        return;
-    };
-    let Some(srid) = optional_srid_arg(ctx, argv, with_srid, 2, "ST_Point") else {
-        return;
-    };
+        let Some(x) = require_f64_arg(ctx, argv, 0, "ST_Point", "x") else {
+            return;
+        };
+        let Some(y) = require_f64_arg(ctx, argv, 1, "ST_Point", "y") else {
+            return;
+        };
+        let Some(srid) = optional_srid_arg(ctx, argv, with_srid, 2, "ST_Point") else {
+            return;
+        };
 
-    match st_point(x, y, srid) {
-        Ok(v) => set_blob(ctx, &v),
-        Err(e) => set_error(ctx, &format!("ST_Point: {e}")),
+        match st_point(x, y, srid) {
+            Ok(v) => set_blob(ctx, &v),
+            Err(e) => set_error(ctx, &format!("ST_Point: {e}")),
+        }
     }
 }
 
@@ -588,9 +654,11 @@ unsafe extern "C" fn st_point_2_xfunc(
     _n: c_int,
     argv: *mut *mut sqlite3_value,
 ) {
-    xfunc_guard(ctx, "ST_Point", || {
-        st_point_impl(ctx, argv, false);
-    });
+    unsafe {
+        xfunc_guard(ctx, "ST_Point", || {
+            st_point_impl(ctx, argv, false);
+        });
+    }
 }
 
 unsafe extern "C" fn st_point_3_xfunc(
@@ -598,9 +666,11 @@ unsafe extern "C" fn st_point_3_xfunc(
     _n: c_int,
     argv: *mut *mut sqlite3_value,
 ) {
-    xfunc_guard(ctx, "ST_Point", || {
-        st_point_impl(ctx, argv, true);
-    });
+    unsafe {
+        xfunc_guard(ctx, "ST_Point", || {
+            st_point_impl(ctx, argv, true);
+        });
+    }
 }
 
 xfunc_blob2!(
@@ -621,31 +691,33 @@ unsafe fn st_makeenvelope_impl(
     argv: *mut *mut sqlite3_value,
     with_srid: bool,
 ) {
-    let arg_count = if with_srid { 5 } else { 4 };
-    if any_arg_is_null(argv, arg_count) {
-        set_null(ctx);
-        return;
-    }
+    unsafe {
+        let arg_count = if with_srid { 5 } else { 4 };
+        if any_arg_is_null(argv, arg_count) {
+            set_null(ctx);
+            return;
+        }
 
-    let Some(xmin) = require_f64_arg(ctx, argv, 0, "ST_MakeEnvelope", "xmin") else {
-        return;
-    };
-    let Some(ymin) = require_f64_arg(ctx, argv, 1, "ST_MakeEnvelope", "ymin") else {
-        return;
-    };
-    let Some(xmax) = require_f64_arg(ctx, argv, 2, "ST_MakeEnvelope", "xmax") else {
-        return;
-    };
-    let Some(ymax) = require_f64_arg(ctx, argv, 3, "ST_MakeEnvelope", "ymax") else {
-        return;
-    };
-    let Some(srid) = optional_srid_arg(ctx, argv, with_srid, 4, "ST_MakeEnvelope") else {
-        return;
-    };
+        let Some(xmin) = require_f64_arg(ctx, argv, 0, "ST_MakeEnvelope", "xmin") else {
+            return;
+        };
+        let Some(ymin) = require_f64_arg(ctx, argv, 1, "ST_MakeEnvelope", "ymin") else {
+            return;
+        };
+        let Some(xmax) = require_f64_arg(ctx, argv, 2, "ST_MakeEnvelope", "xmax") else {
+            return;
+        };
+        let Some(ymax) = require_f64_arg(ctx, argv, 3, "ST_MakeEnvelope", "ymax") else {
+            return;
+        };
+        let Some(srid) = optional_srid_arg(ctx, argv, with_srid, 4, "ST_MakeEnvelope") else {
+            return;
+        };
 
-    match st_make_envelope(xmin, ymin, xmax, ymax, srid) {
-        Ok(v) => set_blob(ctx, &v),
-        Err(e) => set_error(ctx, &format!("ST_MakeEnvelope: {e}")),
+        match st_make_envelope(xmin, ymin, xmax, ymax, srid) {
+            Ok(v) => set_blob(ctx, &v),
+            Err(e) => set_error(ctx, &format!("ST_MakeEnvelope: {e}")),
+        }
     }
 }
 
@@ -654,9 +726,11 @@ unsafe extern "C" fn st_makeenvelope_4_xfunc(
     _n: c_int,
     argv: *mut *mut sqlite3_value,
 ) {
-    xfunc_guard(ctx, "ST_MakeEnvelope", || {
-        st_makeenvelope_impl(ctx, argv, false);
-    });
+    unsafe {
+        xfunc_guard(ctx, "ST_MakeEnvelope", || {
+            st_makeenvelope_impl(ctx, argv, false);
+        });
+    }
 }
 
 unsafe extern "C" fn st_makeenvelope_5_xfunc(
@@ -664,9 +738,11 @@ unsafe extern "C" fn st_makeenvelope_5_xfunc(
     _n: c_int,
     argv: *mut *mut sqlite3_value,
 ) {
-    xfunc_guard(ctx, "ST_MakeEnvelope", || {
-        st_makeenvelope_impl(ctx, argv, true);
-    });
+    unsafe {
+        xfunc_guard(ctx, "ST_MakeEnvelope", || {
+            st_makeenvelope_impl(ctx, argv, true);
+        });
+    }
 }
 
 xfunc_blob2!(st_collect_xfunc, "ST_Collect", st_collect, set_blob_owned);
@@ -676,38 +752,42 @@ unsafe extern "C" fn st_tileenvelope_xfunc(
     _n: c_int,
     argv: *mut *mut sqlite3_value,
 ) {
-    xfunc_guard(ctx, "ST_TileEnvelope", || {
-        let Some(zoom_i32) = require_i32_arg(ctx, argv, 0, "ST_TileEnvelope", "zoom") else {
-            return;
-        };
-        let Some(tile_x_i32) = require_i32_arg(ctx, argv, 1, "ST_TileEnvelope", "tile x") else {
-            return;
-        };
-        let Some(tile_y_i32) = require_i32_arg(ctx, argv, 2, "ST_TileEnvelope", "tile y") else {
-            return;
-        };
+    unsafe {
+        xfunc_guard(ctx, "ST_TileEnvelope", || {
+            let Some(zoom_i32) = require_i32_arg(ctx, argv, 0, "ST_TileEnvelope", "zoom") else {
+                return;
+            };
+            let Some(tile_x_i32) = require_i32_arg(ctx, argv, 1, "ST_TileEnvelope", "tile x")
+            else {
+                return;
+            };
+            let Some(tile_y_i32) = require_i32_arg(ctx, argv, 2, "ST_TileEnvelope", "tile y")
+            else {
+                return;
+            };
 
-        if zoom_i32 < 0 {
-            set_error(ctx, "ST_TileEnvelope: zoom must be non-negative");
-            return;
-        }
-        if tile_x_i32 < 0 {
-            set_error(ctx, "ST_TileEnvelope: tile x must be non-negative");
-            return;
-        }
-        if tile_y_i32 < 0 {
-            set_error(ctx, "ST_TileEnvelope: tile y must be non-negative");
-            return;
-        }
+            if zoom_i32 < 0 {
+                set_error(ctx, "ST_TileEnvelope: zoom must be non-negative");
+                return;
+            }
+            if tile_x_i32 < 0 {
+                set_error(ctx, "ST_TileEnvelope: tile x must be non-negative");
+                return;
+            }
+            if tile_y_i32 < 0 {
+                set_error(ctx, "ST_TileEnvelope: tile y must be non-negative");
+                return;
+            }
 
-        let zoom = zoom_i32 as u32;
-        let tile_x = tile_x_i32 as u32;
-        let tile_y = tile_y_i32 as u32;
-        match st_tile_envelope(zoom, tile_x, tile_y) {
-            Ok(v) => set_blob(ctx, &v),
-            Err(e) => set_error(ctx, &format!("ST_TileEnvelope: {e}")),
-        }
-    });
+            let zoom = zoom_i32 as u32;
+            let tile_x = tile_x_i32 as u32;
+            let tile_y = tile_y_i32 as u32;
+            match st_tile_envelope(zoom, tile_x, tile_y) {
+                Ok(v) => set_blob(ctx, &v),
+                Err(e) => set_error(ctx, &format!("ST_TileEnvelope: {e}")),
+            }
+        });
+    }
 }
 
 // Accessor callbacks
@@ -719,19 +799,21 @@ unsafe extern "C" fn st_setsrid_xfunc(
     _n: c_int,
     argv: *mut *mut sqlite3_value,
 ) {
-    xfunc_guard(ctx, "ST_SetSRID", || {
-        let Some(b) = get_blob(argv, 0) else {
-            set_null(ctx);
-            return;
-        };
-        let Some(srid) = require_i32_arg(ctx, argv, 1, "ST_SetSRID", "srid") else {
-            return;
-        };
-        match st_set_srid(b, srid) {
-            Ok(v) => set_blob(ctx, &v),
-            Err(e) => set_error(ctx, &format!("ST_SetSRID: {e}")),
-        }
-    });
+    unsafe {
+        xfunc_guard(ctx, "ST_SetSRID", || {
+            let Some(b) = get_blob(argv, 0) else {
+                set_null(ctx);
+                return;
+            };
+            let Some(srid) = require_i32_arg(ctx, argv, 1, "ST_SetSRID", "srid") else {
+                return;
+            };
+            match st_set_srid(b, srid) {
+                Ok(v) => set_blob(ctx, &v),
+                Err(e) => set_error(ctx, &format!("ST_SetSRID: {e}")),
+            }
+        });
+    }
 }
 
 xfunc_blob!(
@@ -963,88 +1045,94 @@ fn sql_to_cstring(sql: &str) -> std::result::Result<CString, std::ffi::NulError>
 }
 
 unsafe fn exec_sql_inner(db: *mut sqlite3, sql: &str, ctx: Option<*mut sqlite3_context>) -> c_int {
-    let c_sql = match sql_to_cstring(sql) {
-        Ok(v) => v,
-        Err(_) => {
+    unsafe {
+        let c_sql = match sql_to_cstring(sql) {
+            Ok(v) => v,
+            Err(_) => {
+                if let Some(ctx) = ctx {
+                    set_error(ctx, "internal error: generated SQL contains NUL byte");
+                }
+                return SQLITE_ERROR;
+            }
+        };
+
+        let mut err_msg: *mut std::ffi::c_char = std::ptr::null_mut();
+        let rc = sqlite3_exec(db, c_sql.as_ptr(), None, std::ptr::null_mut(), &mut err_msg);
+
+        if rc != SQLITE_OK {
             if let Some(ctx) = ctx {
-                set_error(ctx, "internal error: generated SQL contains NUL byte");
-            }
-            return SQLITE_ERROR;
-        }
-    };
-
-    let mut err_msg: *mut std::ffi::c_char = std::ptr::null_mut();
-    let rc = sqlite3_exec(db, c_sql.as_ptr(), None, std::ptr::null_mut(), &mut err_msg);
-
-    if rc != SQLITE_OK {
-        if let Some(ctx) = ctx {
-            if err_msg.is_null() {
-                set_error(ctx, "exec_sql failed");
-            } else {
-                let msg = CStr::from_ptr(err_msg).to_string_lossy();
-                set_error(ctx, &msg);
+                if err_msg.is_null() {
+                    set_error(ctx, "exec_sql failed");
+                } else {
+                    let msg = CStr::from_ptr(err_msg).to_string_lossy();
+                    set_error(ctx, &msg);
+                }
             }
         }
-    }
 
-    if !err_msg.is_null() {
-        sqlite3_free(err_msg.cast());
+        if !err_msg.is_null() {
+            sqlite3_free(err_msg.cast());
+        }
+        rc
     }
-    rc
 }
 
 /// Run SQL via `sqlite3_exec`, returning `SQLITE_OK` on success.
 /// On failure, sets `sqlite3_result_error` on `ctx` with the error message
 /// from SQLite and frees it via `sqlite3_free`.
 unsafe fn exec_sql(db: *mut sqlite3, ctx: *mut sqlite3_context, sql: &str) -> c_int {
-    exec_sql_inner(db, sql, Some(ctx))
+    unsafe { exec_sql_inner(db, sql, Some(ctx)) }
 }
 
 /// Run SQL via `sqlite3_exec` but never touch sqlite3_result_error.
 /// Used for best-effort rollback paths where the original error should win.
 unsafe fn exec_sql_silent(db: *mut sqlite3, sql: &str) -> c_int {
-    exec_sql_inner(db, sql, None)
+    unsafe { exec_sql_inner(db, sql, None) }
 }
 
 unsafe fn rollback_savepoint(db: *mut sqlite3, ctx: *mut sqlite3_context, savepoint: &str) {
-    let _ = ctx;
-    let _ = exec_sql_silent(db, &format!("ROLLBACK TO {savepoint}"));
-    let _ = exec_sql_silent(db, &format!("RELEASE {savepoint}"));
+    unsafe {
+        let _ = ctx;
+        let _ = exec_sql_silent(db, &format!("ROLLBACK TO {savepoint}"));
+        let _ = exec_sql_silent(db, &format!("RELEASE {savepoint}"));
+    }
 }
 
 unsafe fn sqlite_master_lookup_text(
     db: *mut sqlite3,
     sql: &str,
 ) -> std::result::Result<Option<String>, String> {
-    let c_sql = sql_to_cstring(sql)
-        .map_err(|_| "internal error: generated SQL contains NUL byte".to_string())?;
-    let mut stmt: *mut sqlite3_stmt = std::ptr::null_mut();
-    let rc = sqlite3_prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut());
-    if rc != SQLITE_OK {
-        return Err(CStr::from_ptr(sqlite3_errmsg(db))
-            .to_string_lossy()
-            .into_owned());
-    }
-
-    let mut result = None;
-    let step = sqlite3_step(stmt);
-    if step == SQLITE_ROW {
-        if sqlite3_column_type(stmt, 0) != SQLITE_NULL {
-            let ptr = sqlite3_column_text(stmt, 0);
-            if !ptr.is_null() {
-                result = Some(CStr::from_ptr(ptr.cast()).to_string_lossy().into_owned());
-            }
+    unsafe {
+        let c_sql = sql_to_cstring(sql)
+            .map_err(|_| "internal error: generated SQL contains NUL byte".to_string())?;
+        let mut stmt: *mut sqlite3_stmt = std::ptr::null_mut();
+        let rc = sqlite3_prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut());
+        if rc != SQLITE_OK {
+            return Err(CStr::from_ptr(sqlite3_errmsg(db))
+                .to_string_lossy()
+                .into_owned());
         }
-    } else if step != SQLITE_DONE {
-        let err = CStr::from_ptr(sqlite3_errmsg(db))
-            .to_string_lossy()
-            .into_owned();
-        let _ = sqlite3_finalize(stmt);
-        return Err(err);
-    }
 
-    let _ = sqlite3_finalize(stmt);
-    Ok(result)
+        let mut result = None;
+        let step = sqlite3_step(stmt);
+        if step == SQLITE_ROW {
+            if sqlite3_column_type(stmt, 0) != SQLITE_NULL {
+                let ptr = sqlite3_column_text(stmt, 0);
+                if !ptr.is_null() {
+                    result = Some(CStr::from_ptr(ptr.cast()).to_string_lossy().into_owned());
+                }
+            }
+        } else if step != SQLITE_DONE {
+            let err = CStr::from_ptr(sqlite3_errmsg(db))
+                .to_string_lossy()
+                .into_owned();
+            let _ = sqlite3_finalize(stmt);
+            return Err(err);
+        }
+
+        let _ = sqlite3_finalize(stmt);
+        Ok(result)
+    }
 }
 
 const SPATIAL_INDEX_CATALOG_TABLE: &str = "sqlitegis_spatial_index_catalog";
@@ -1060,57 +1148,61 @@ unsafe fn lookup_sqlite_master_object_type(
     db: *mut sqlite3,
     object_name: &str,
 ) -> std::result::Result<Option<String>, String> {
-    let sql = format!("SELECT type FROM sqlite_master WHERE name = '{object_name}' LIMIT 1");
-    sqlite_master_lookup_text(db, &sql)
+    unsafe {
+        let sql = format!("SELECT type FROM sqlite_master WHERE name = '{object_name}' LIMIT 1");
+        sqlite_master_lookup_text(db, &sql)
+    }
 }
 
 unsafe fn inspect_spatial_index_catalog_columns(
     db: *mut sqlite3,
 ) -> std::result::Result<(bool, bool, bool), String> {
-    let sql = format!("PRAGMA table_info([{SPATIAL_INDEX_CATALOG_TABLE}])");
-    let c_sql = sql_to_cstring(&sql)
-        .map_err(|_| "internal error: generated SQL contains NUL byte".to_string())?;
-    let mut stmt: *mut sqlite3_stmt = std::ptr::null_mut();
-    let rc = sqlite3_prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut());
-    if rc != SQLITE_OK {
-        return Err(CStr::from_ptr(sqlite3_errmsg(db))
-            .to_string_lossy()
-            .into_owned());
-    }
+    unsafe {
+        let sql = format!("PRAGMA table_info([{SPATIAL_INDEX_CATALOG_TABLE}])");
+        let c_sql = sql_to_cstring(&sql)
+            .map_err(|_| "internal error: generated SQL contains NUL byte".to_string())?;
+        let mut stmt: *mut sqlite3_stmt = std::ptr::null_mut();
+        let rc = sqlite3_prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut());
+        if rc != SQLITE_OK {
+            return Err(CStr::from_ptr(sqlite3_errmsg(db))
+                .to_string_lossy()
+                .into_owned());
+        }
 
-    let mut has_prefix = false;
-    let mut has_table_name = false;
-    let mut has_column_name = false;
+        let mut has_prefix = false;
+        let mut has_table_name = false;
+        let mut has_column_name = false;
 
-    loop {
-        let step = sqlite3_step(stmt);
-        if step == SQLITE_ROW {
-            if sqlite3_column_type(stmt, 1) != SQLITE_NULL {
-                let ptr = sqlite3_column_text(stmt, 1);
-                if !ptr.is_null() {
-                    let column_name = CStr::from_ptr(ptr.cast()).to_string_lossy();
-                    match column_name.as_ref() {
-                        "prefix" => has_prefix = true,
-                        "table_name" => has_table_name = true,
-                        "column_name" => has_column_name = true,
-                        _ => {}
+        loop {
+            let step = sqlite3_step(stmt);
+            if step == SQLITE_ROW {
+                if sqlite3_column_type(stmt, 1) != SQLITE_NULL {
+                    let ptr = sqlite3_column_text(stmt, 1);
+                    if !ptr.is_null() {
+                        let column_name = CStr::from_ptr(ptr.cast()).to_string_lossy();
+                        match column_name.as_ref() {
+                            "prefix" => has_prefix = true,
+                            "table_name" => has_table_name = true,
+                            "column_name" => has_column_name = true,
+                            _ => {}
+                        }
                     }
                 }
+                continue;
             }
-            continue;
+            if step == SQLITE_DONE {
+                break;
+            }
+            let err = CStr::from_ptr(sqlite3_errmsg(db))
+                .to_string_lossy()
+                .into_owned();
+            let _ = sqlite3_finalize(stmt);
+            return Err(err);
         }
-        if step == SQLITE_DONE {
-            break;
-        }
-        let err = CStr::from_ptr(sqlite3_errmsg(db))
-            .to_string_lossy()
-            .into_owned();
-        let _ = sqlite3_finalize(stmt);
-        return Err(err);
-    }
 
-    let _ = sqlite3_finalize(stmt);
-    Ok((has_prefix, has_table_name, has_column_name))
+        let _ = sqlite3_finalize(stmt);
+        Ok((has_prefix, has_table_name, has_column_name))
+    }
 }
 
 unsafe fn validate_spatial_index_catalog_shape(
@@ -1118,39 +1210,8 @@ unsafe fn validate_spatial_index_catalog_shape(
     ctx: *mut sqlite3_context,
     label: &str,
 ) -> bool {
-    let object_type = match lookup_sqlite_master_object_type(db, SPATIAL_INDEX_CATALOG_TABLE) {
-        Ok(v) => v,
-        Err(e) => {
-            set_error(
-                ctx,
-                &format!("{label}: failed to inspect spatial index catalog metadata: {e}"),
-            );
-            return false;
-        }
-    };
-    let Some(object_type) = object_type else {
-        set_error(
-            ctx,
-            &format!(
-                "{label}: failed to inspect spatial index catalog metadata: \
-                 missing sqlite_master entry for [{SPATIAL_INDEX_CATALOG_TABLE}]"
-            ),
-        );
-        return false;
-    };
-    if object_type != "table" {
-        set_error(
-            ctx,
-            &format!(
-                "{label}: invalid spatial index catalog object type for \
-                 [{SPATIAL_INDEX_CATALOG_TABLE}] (expected table, found [{object_type}])"
-            ),
-        );
-        return false;
-    }
-
-    let (has_prefix, has_table_name, has_column_name) =
-        match inspect_spatial_index_catalog_columns(db) {
+    unsafe {
+        let object_type = match lookup_sqlite_master_object_type(db, SPATIAL_INDEX_CATALOG_TABLE) {
             Ok(v) => v,
             Err(e) => {
                 set_error(
@@ -1160,22 +1221,55 @@ unsafe fn validate_spatial_index_catalog_shape(
                 return false;
             }
         };
-
-    let present = [has_prefix, has_table_name, has_column_name];
-    for (i, required_column) in SPATIAL_INDEX_CATALOG_REQUIRED_COLUMNS.iter().enumerate() {
-        if !present[i] {
+        let Some(object_type) = object_type else {
             set_error(
                 ctx,
                 &format!(
-                    "{label}: invalid spatial index catalog schema for \
-                     [{SPATIAL_INDEX_CATALOG_TABLE}] (missing required column [{required_column}])"
+                    "{label}: failed to inspect spatial index catalog metadata: \
+                 missing sqlite_master entry for [{SPATIAL_INDEX_CATALOG_TABLE}]"
+                ),
+            );
+            return false;
+        };
+        if object_type != "table" {
+            set_error(
+                ctx,
+                &format!(
+                    "{label}: invalid spatial index catalog object type for \
+                 [{SPATIAL_INDEX_CATALOG_TABLE}] (expected table, found [{object_type}])"
                 ),
             );
             return false;
         }
-    }
 
-    true
+        let (has_prefix, has_table_name, has_column_name) =
+            match inspect_spatial_index_catalog_columns(db) {
+                Ok(v) => v,
+                Err(e) => {
+                    set_error(
+                        ctx,
+                        &format!("{label}: failed to inspect spatial index catalog metadata: {e}"),
+                    );
+                    return false;
+                }
+            };
+
+        let present = [has_prefix, has_table_name, has_column_name];
+        for (i, required_column) in SPATIAL_INDEX_CATALOG_REQUIRED_COLUMNS.iter().enumerate() {
+            if !present[i] {
+                set_error(
+                    ctx,
+                    &format!(
+                        "{label}: invalid spatial index catalog schema for \
+                     [{SPATIAL_INDEX_CATALOG_TABLE}] (missing required column [{required_column}])"
+                    ),
+                );
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 unsafe fn ensure_spatial_index_catalog_table(
@@ -1183,84 +1277,89 @@ unsafe fn ensure_spatial_index_catalog_table(
     ctx: *mut sqlite3_context,
     label: &str,
 ) -> bool {
-    let object_type = match lookup_sqlite_master_object_type(db, SPATIAL_INDEX_CATALOG_TABLE) {
-        Ok(v) => v,
-        Err(e) => {
-            set_error(
-                ctx,
-                &format!("{label}: failed to inspect spatial index catalog metadata: {e}"),
-            );
-            return false;
-        }
-    };
-    if let Some(object_type) = object_type {
-        if object_type != "table" {
-            set_error(
-                ctx,
-                &format!(
-                    "{label}: invalid spatial index catalog object type for \
+    unsafe {
+        let object_type = match lookup_sqlite_master_object_type(db, SPATIAL_INDEX_CATALOG_TABLE) {
+            Ok(v) => v,
+            Err(e) => {
+                set_error(
+                    ctx,
+                    &format!("{label}: failed to inspect spatial index catalog metadata: {e}"),
+                );
+                return false;
+            }
+        };
+        if let Some(object_type) = object_type {
+            if object_type != "table" {
+                set_error(
+                    ctx,
+                    &format!(
+                        "{label}: invalid spatial index catalog object type for \
                      [{SPATIAL_INDEX_CATALOG_TABLE}] (expected table, found [{object_type}])"
-                ),
-            );
-            return false;
+                    ),
+                );
+                return false;
+            }
         }
-    }
 
-    let sql = format!(
-        "CREATE TABLE IF NOT EXISTS [{SPATIAL_INDEX_CATALOG_TABLE}] (\
+        let sql = format!(
+            "CREATE TABLE IF NOT EXISTS [{SPATIAL_INDEX_CATALOG_TABLE}] (\
          prefix TEXT PRIMARY KEY, \
          table_name TEXT NOT NULL, \
          column_name TEXT NOT NULL, \
          UNIQUE(table_name, column_name)\
          )"
-    );
-    if exec_sql_silent(db, &sql) == SQLITE_OK {
-        return true;
-    }
+        );
+        if exec_sql_silent(db, &sql) == SQLITE_OK {
+            return true;
+        }
 
-    let err = CStr::from_ptr(sqlite3_errmsg(db))
-        .to_string_lossy()
-        .into_owned();
-    set_error(
-        ctx,
-        &format!("{label}: failed to ensure spatial index catalog: {err}"),
-    );
-    false
+        let err = CStr::from_ptr(sqlite3_errmsg(db))
+            .to_string_lossy()
+            .into_owned();
+        set_error(
+            ctx,
+            &format!("{label}: failed to ensure spatial index catalog: {err}"),
+        );
+        false
+    }
 }
 
 unsafe fn lookup_spatial_index_catalog_owner(
     db: *mut sqlite3,
     prefix: &str,
 ) -> std::result::Result<Option<(String, String)>, String> {
-    let sql = format!(
-        "SELECT table_name FROM [{SPATIAL_INDEX_CATALOG_TABLE}] \
+    unsafe {
+        let sql = format!(
+            "SELECT table_name FROM [{SPATIAL_INDEX_CATALOG_TABLE}] \
          WHERE prefix = '{prefix}' LIMIT 1"
-    );
-    let owner_table = sqlite_master_lookup_text(db, &sql)?;
-    let Some(owner_table) = owner_table else {
-        return Ok(None);
-    };
+        );
+        let owner_table = sqlite_master_lookup_text(db, &sql)?;
+        let Some(owner_table) = owner_table else {
+            return Ok(None);
+        };
 
-    let sql = format!(
-        "SELECT column_name FROM [{SPATIAL_INDEX_CATALOG_TABLE}] \
+        let sql = format!(
+            "SELECT column_name FROM [{SPATIAL_INDEX_CATALOG_TABLE}] \
          WHERE prefix = '{prefix}' LIMIT 1"
-    );
-    let owner_column = sqlite_master_lookup_text(db, &sql)?;
-    let Some(owner_column) = owner_column else {
-        return Err(format!(
-            "internal error: catalog row for prefix [{prefix}] is missing column_name"
-        ));
-    };
-    Ok(Some((owner_table, owner_column)))
+        );
+        let owner_column = sqlite_master_lookup_text(db, &sql)?;
+        let Some(owner_column) = owner_column else {
+            return Err(format!(
+                "internal error: catalog row for prefix [{prefix}] is missing column_name"
+            ));
+        };
+        Ok(Some((owner_table, owner_column)))
+    }
 }
 
 unsafe fn managed_spatial_index_objects_exist(
     db: *mut sqlite3,
     prefix: &str,
 ) -> std::result::Result<bool, String> {
-    let rtree_name = format!("{prefix}_rtree");
-    let sql = format!(
-        "SELECT name FROM sqlite_master WHERE name IN (\
+    unsafe {
+        let rtree_name = format!("{prefix}_rtree");
+        let sql = format!(
+            "SELECT name FROM sqlite_master WHERE name IN (\
          '{rtree_name}', \
          '{rtree_name}_node', \
          '{rtree_name}_parent', \
@@ -1269,8 +1368,9 @@ unsafe fn managed_spatial_index_objects_exist(
          '{prefix}_update', \
          '{prefix}_delete'\
          ) LIMIT 1"
-    );
-    Ok(sqlite_master_lookup_text(db, &sql)?.is_some())
+        );
+        Ok(sqlite_master_lookup_text(db, &sql)?.is_some())
+    }
 }
 
 unsafe fn ensure_spatial_index_table_shape(
@@ -1279,62 +1379,64 @@ unsafe fn ensure_spatial_index_table_shape(
     prefix: &str,
     label: &str,
 ) -> bool {
-    // The managed object `{prefix}_rtree` must be either absent or a real
-    // SQLite table backed by the expected R-tree shadow tables.
-    let rtree_name = format!("{prefix}_rtree");
-    let sql = format!("SELECT type FROM sqlite_master WHERE name = '{rtree_name}' LIMIT 1");
-    let object_type = match sqlite_master_lookup_text(db, &sql) {
-        Ok(v) => v,
-        Err(e) => {
-            set_error(
-                ctx,
-                &format!("{label}: failed to inspect sqlite_master: {e}"),
-            );
-            return false;
-        }
-    };
-    if let Some(object_type) = object_type {
-        if object_type != "table" {
-            set_error(
-                ctx,
-                &format!(
-                    "{label}: unexpected sqlite_master entry for [{rtree_name}] \
-                     (type [{object_type}]); expected table"
-                ),
-            );
-            return false;
-        }
-
-        for shadow_suffix in &["_node", "_parent", "_rowid"] {
-            let shadow_name = format!("{rtree_name}{shadow_suffix}");
-            let sql = format!(
-                "SELECT name FROM sqlite_master \
-                 WHERE type = 'table' AND name = '{shadow_name}' LIMIT 1"
-            );
-            let shadow_exists = match sqlite_master_lookup_text(db, &sql) {
-                Ok(v) => v,
-                Err(e) => {
-                    set_error(
-                        ctx,
-                        &format!("{label}: failed to inspect sqlite_master: {e}"),
-                    );
-                    return false;
-                }
-            };
-            if shadow_exists.is_none() {
+    unsafe {
+        // The managed object `{prefix}_rtree` must be either absent or a real
+        // SQLite table backed by the expected R-tree shadow tables.
+        let rtree_name = format!("{prefix}_rtree");
+        let sql = format!("SELECT type FROM sqlite_master WHERE name = '{rtree_name}' LIMIT 1");
+        let object_type = match sqlite_master_lookup_text(db, &sql) {
+            Ok(v) => v,
+            Err(e) => {
+                set_error(
+                    ctx,
+                    &format!("{label}: failed to inspect sqlite_master: {e}"),
+                );
+                return false;
+            }
+        };
+        if let Some(object_type) = object_type {
+            if object_type != "table" {
                 set_error(
                     ctx,
                     &format!(
-                        "{label}: existing table [{rtree_name}] is not an R-tree index \
-                         managed by SQLiteGIS (missing shadow table [{shadow_name}])"
+                        "{label}: unexpected sqlite_master entry for [{rtree_name}] \
+                     (type [{object_type}]); expected table"
                     ),
                 );
                 return false;
             }
-        }
-    }
 
-    true
+            for shadow_suffix in &["_node", "_parent", "_rowid"] {
+                let shadow_name = format!("{rtree_name}{shadow_suffix}");
+                let sql = format!(
+                    "SELECT name FROM sqlite_master \
+                 WHERE type = 'table' AND name = '{shadow_name}' LIMIT 1"
+                );
+                let shadow_exists = match sqlite_master_lookup_text(db, &sql) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        set_error(
+                            ctx,
+                            &format!("{label}: failed to inspect sqlite_master: {e}"),
+                        );
+                        return false;
+                    }
+                };
+                if shadow_exists.is_none() {
+                    set_error(
+                        ctx,
+                        &format!(
+                            "{label}: existing table [{rtree_name}] is not an R-tree index \
+                         managed by SQLiteGIS (missing shadow table [{shadow_name}])"
+                        ),
+                    );
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
 }
 
 unsafe fn ensure_spatial_index_objects_owned_by_table(
@@ -1344,17 +1446,67 @@ unsafe fn ensure_spatial_index_objects_owned_by_table(
     column: &str,
     label: &str,
 ) -> Option<SpatialIndexOwnership> {
-    // Object names are built as `{table}_{column}_...`. Different input pairs
-    // can collide (e.g. `a_b`+`c` vs `a`+`b_c`). Detect and fail fast instead
-    // of silently reusing another table's triggers/index objects.
-    let prefix = format!("{table}_{column}");
-    for suffix in &["_insert", "_update", "_delete"] {
-        let trigger_name = format!("{prefix}{suffix}");
-        let sql = format!(
-            "SELECT tbl_name FROM sqlite_master \
+    unsafe {
+        // Object names are built as `{table}_{column}_...`. Different input pairs
+        // can collide (e.g. `a_b`+`c` vs `a`+`b_c`). Detect and fail fast instead
+        // of silently reusing another table's triggers/index objects.
+        let prefix = format!("{table}_{column}");
+        for suffix in &["_insert", "_update", "_delete"] {
+            let trigger_name = format!("{prefix}{suffix}");
+            let sql = format!(
+                "SELECT tbl_name FROM sqlite_master \
              WHERE type = 'trigger' AND name = '{trigger_name}' LIMIT 1"
-        );
-        let owner = match sqlite_master_lookup_text(db, &sql) {
+            );
+            let owner = match sqlite_master_lookup_text(db, &sql) {
+                Ok(v) => v,
+                Err(e) => {
+                    set_error(
+                        ctx,
+                        &format!("{label}: failed to inspect sqlite_master: {e}"),
+                    );
+                    return None;
+                }
+            };
+            if let Some(owner) = owner {
+                if owner != table {
+                    set_error(
+                        ctx,
+                        &format!(
+                            "{label}: naming collision for trigger [{trigger_name}] \
+                         between tables [{owner}] and [{table}]"
+                        ),
+                    );
+                    return None;
+                }
+            }
+        }
+
+        if !ensure_spatial_index_table_shape(db, ctx, &prefix, label) {
+            return None;
+        }
+
+        let owner = match lookup_spatial_index_catalog_owner(db, &prefix) {
+            Ok(v) => v,
+            Err(e) => {
+                set_error(ctx, &format!("{label}: failed to inspect catalog: {e}"));
+                return None;
+            }
+        };
+        if let Some((owner_table, owner_column)) = owner {
+            if owner_table == table && owner_column == column {
+                return Some(SpatialIndexOwnership::Owned);
+            }
+            set_error(
+                ctx,
+                &format!(
+                    "{label}: naming collision for managed prefix [{prefix}] \
+                 between [{owner_table}.{owner_column}] and [{table}.{column}]"
+                ),
+            );
+            return None;
+        }
+
+        let objects_exist = match managed_spatial_index_objects_exist(db, &prefix) {
             Ok(v) => v,
             Err(e) => {
                 set_error(
@@ -1364,67 +1516,19 @@ unsafe fn ensure_spatial_index_objects_owned_by_table(
                 return None;
             }
         };
-        if let Some(owner) = owner {
-            if owner != table {
-                set_error(
-                    ctx,
-                    &format!(
-                        "{label}: naming collision for trigger [{trigger_name}] \
-                         between tables [{owner}] and [{table}]"
-                    ),
-                );
-                return None;
-            }
-        }
-    }
-
-    if !ensure_spatial_index_table_shape(db, ctx, &prefix, label) {
-        return None;
-    }
-
-    let owner = match lookup_spatial_index_catalog_owner(db, &prefix) {
-        Ok(v) => v,
-        Err(e) => {
-            set_error(ctx, &format!("{label}: failed to inspect catalog: {e}"));
-            return None;
-        }
-    };
-    if let Some((owner_table, owner_column)) = owner {
-        if owner_table == table && owner_column == column {
-            return Some(SpatialIndexOwnership::Owned);
-        }
-        set_error(
-            ctx,
-            &format!(
-                "{label}: naming collision for managed prefix [{prefix}] \
-                 between [{owner_table}.{owner_column}] and [{table}.{column}]"
-            ),
-        );
-        return None;
-    }
-
-    let objects_exist = match managed_spatial_index_objects_exist(db, &prefix) {
-        Ok(v) => v,
-        Err(e) => {
+        if objects_exist {
             set_error(
                 ctx,
-                &format!("{label}: failed to inspect sqlite_master: {e}"),
+                &format!(
+                    "{label}: cannot prove ownership for [{prefix}] because managed objects exist \
+                 without an ownership marker"
+                ),
             );
             return None;
         }
-    };
-    if objects_exist {
-        set_error(
-            ctx,
-            &format!(
-                "{label}: cannot prove ownership for [{prefix}] because managed objects exist \
-                 without an ownership marker"
-            ),
-        );
-        return None;
-    }
 
-    Some(SpatialIndexOwnership::Absent)
+        Some(SpatialIndexOwnership::Absent)
+    }
 }
 
 // Spatial index callbacks
@@ -1436,49 +1540,51 @@ unsafe fn get_table_column<'a>(
     argv: *mut *mut sqlite3_value,
     label: &str,
 ) -> Option<(&'a str, &'a str)> {
-    let table = match get_text(argv, 0) {
-        SqlTextArg::Value(v) => v,
-        SqlTextArg::Null => {
-            set_error(ctx, &format!("{label}: table name must not be NULL"));
-            return None;
-        }
-        SqlTextArg::InvalidUtf8 => {
+    unsafe {
+        let table = match get_text(argv, 0) {
+            SqlTextArg::Value(v) => v,
+            SqlTextArg::Null => {
+                set_error(ctx, &format!("{label}: table name must not be NULL"));
+                return None;
+            }
+            SqlTextArg::InvalidUtf8 => {
+                set_error(
+                    ctx,
+                    &format!("{label}: table name must be valid UTF-8 text"),
+                );
+                return None;
+            }
+        };
+        let column = match get_text(argv, 1) {
+            SqlTextArg::Value(v) => v,
+            SqlTextArg::Null => {
+                set_error(ctx, &format!("{label}: column name must not be NULL"));
+                return None;
+            }
+            SqlTextArg::InvalidUtf8 => {
+                set_error(
+                    ctx,
+                    &format!("{label}: column name must be valid UTF-8 text"),
+                );
+                return None;
+            }
+        };
+        let Some(table) = validate_identifier(table) else {
             set_error(
                 ctx,
-                &format!("{label}: table name must be valid UTF-8 text"),
+                &format!("{label}: invalid table name (only [a-zA-Z0-9_] allowed)"),
             );
             return None;
-        }
-    };
-    let column = match get_text(argv, 1) {
-        SqlTextArg::Value(v) => v,
-        SqlTextArg::Null => {
-            set_error(ctx, &format!("{label}: column name must not be NULL"));
-            return None;
-        }
-        SqlTextArg::InvalidUtf8 => {
+        };
+        let Some(column) = validate_identifier(column) else {
             set_error(
                 ctx,
-                &format!("{label}: column name must be valid UTF-8 text"),
+                &format!("{label}: invalid column name (only [a-zA-Z0-9_] allowed)"),
             );
             return None;
-        }
-    };
-    let Some(table) = validate_identifier(table) else {
-        set_error(
-            ctx,
-            &format!("{label}: invalid table name (only [a-zA-Z0-9_] allowed)"),
-        );
-        return None;
-    };
-    let Some(column) = validate_identifier(column) else {
-        set_error(
-            ctx,
-            &format!("{label}: invalid column name (only [a-zA-Z0-9_] allowed)"),
-        );
-        return None;
-    };
-    Some((table, column))
+        };
+        Some((table, column))
+    }
 }
 
 unsafe extern "C" fn create_spatial_index_xfunc(
@@ -1486,87 +1592,94 @@ unsafe extern "C" fn create_spatial_index_xfunc(
     _n: c_int,
     argv: *mut *mut sqlite3_value,
 ) {
-    xfunc_guard(ctx, "CreateSpatialIndex", || {
-        let Some((table, column)) = get_table_column(ctx, argv, "CreateSpatialIndex") else {
-            return;
-        };
+    unsafe {
+        xfunc_guard(ctx, "CreateSpatialIndex", || {
+            let Some((table, column)) = get_table_column(ctx, argv, "CreateSpatialIndex") else {
+                return;
+            };
 
-        let db = sqlite3_context_db_handle(ctx);
-        let prefix = format!("{table}_{column}");
-        let rtree = format!("{prefix}_rtree");
-        let savepoint = "sqlitegis_create_spatial_index";
+            let db = sqlite3_context_db_handle(ctx);
+            let prefix = format!("{table}_{column}");
+            let rtree = format!("{prefix}_rtree");
+            let savepoint = "sqlitegis_create_spatial_index";
 
-        if exec_sql(db, ctx, &format!("SAVEPOINT {savepoint}")) != SQLITE_OK {
-            return;
-        }
+            if exec_sql(db, ctx, &format!("SAVEPOINT {savepoint}")) != SQLITE_OK {
+                return;
+            }
 
-        if !ensure_spatial_index_catalog_table(db, ctx, "CreateSpatialIndex") {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
-        if !validate_spatial_index_catalog_shape(db, ctx, "CreateSpatialIndex") {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
+            if !ensure_spatial_index_catalog_table(db, ctx, "CreateSpatialIndex") {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
+            if !validate_spatial_index_catalog_shape(db, ctx, "CreateSpatialIndex") {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
 
-        if ensure_spatial_index_objects_owned_by_table(db, ctx, table, column, "CreateSpatialIndex")
-            .is_none()
-        {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
-
-        // Reject WITHOUT ROWID tables before creating any state. The
-        // maintenance triggers reference NEW.rowid and OLD.rowid, which only
-        // exist on regular rowid tables. SQLite refuses to prepare a SELECT
-        // of rowid against a WITHOUT ROWID table, so the probe fails cleanly
-        // at parse time. A successful probe also incidentally proves the
-        // table exists.
-        let probe = format!("SELECT rowid FROM [{table}] LIMIT 0");
-        if exec_sql_silent(db, &probe) != SQLITE_OK {
-            set_error(
+            if ensure_spatial_index_objects_owned_by_table(
+                db,
                 ctx,
-                &format!(
-                    "CreateSpatialIndex: table [{table}] has no rowid column. \
+                table,
+                column,
+                "CreateSpatialIndex",
+            )
+            .is_none()
+            {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
+
+            // Reject WITHOUT ROWID tables before creating any state. The
+            // maintenance triggers reference NEW.rowid and OLD.rowid, which only
+            // exist on regular rowid tables. SQLite refuses to prepare a SELECT
+            // of rowid against a WITHOUT ROWID table, so the probe fails cleanly
+            // at parse time. A successful probe also incidentally proves the
+            // table exists.
+            let probe = format!("SELECT rowid FROM [{table}] LIMIT 0");
+            if exec_sql_silent(db, &probe) != SQLITE_OK {
+                set_error(
+                    ctx,
+                    &format!(
+                        "CreateSpatialIndex: table [{table}] has no rowid column. \
                      WITHOUT ROWID tables are not supported. Recreate the table \
                      without the WITHOUT ROWID clause, or verify the table exists."
-                ),
-            );
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
+                    ),
+                );
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
 
-        // 1. Create the R-tree virtual table if missing.
-        let sql = format!(
+            // 1. Create the R-tree virtual table if missing.
+            let sql = format!(
             "CREATE VIRTUAL TABLE IF NOT EXISTS [{rtree}] USING rtree(id, xmin, xmax, ymin, ymax)"
         );
-        if exec_sql(db, ctx, &sql) != SQLITE_OK {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
+            if exec_sql(db, ctx, &sql) != SQLITE_OK {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
 
-        // 2. Rebuild index contents from the base table (idempotent on repeated calls).
-        let sql = format!("DELETE FROM [{rtree}]");
-        if exec_sql(db, ctx, &sql) != SQLITE_OK {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
+            // 2. Rebuild index contents from the base table (idempotent on repeated calls).
+            let sql = format!("DELETE FROM [{rtree}]");
+            if exec_sql(db, ctx, &sql) != SQLITE_OK {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
 
-        let sql = format!(
-            "INSERT INTO [{rtree}] \
+            let sql = format!(
+                "INSERT INTO [{rtree}] \
              SELECT rowid, ST_XMin([{column}]), ST_XMax([{column}]), \
              ST_YMin([{column}]), ST_YMax([{column}]) \
              FROM [{table}] WHERE [{column}] IS NOT NULL AND ST_IsEmpty([{column}]) = 0"
-        );
-        if exec_sql(db, ctx, &sql) != SQLITE_OK {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
+            );
+            if exec_sql(db, ctx, &sql) != SQLITE_OK {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
 
-        // 3. AFTER INSERT trigger
-        let trigger_insert = format!("{table}_{column}_insert");
-        let sql = format!(
-            "CREATE TRIGGER IF NOT EXISTS [{trigger_insert}] AFTER INSERT ON [{table}] \
+            // 3. AFTER INSERT trigger
+            let trigger_insert = format!("{table}_{column}_insert");
+            let sql = format!(
+                "CREATE TRIGGER IF NOT EXISTS [{trigger_insert}] AFTER INSERT ON [{table}] \
              WHEN NEW.[{column}] IS NOT NULL AND ST_IsEmpty(NEW.[{column}]) = 0 \
              BEGIN \
                INSERT INTO [{rtree}] VALUES ( \
@@ -1575,21 +1688,21 @@ unsafe extern "C" fn create_spatial_index_xfunc(
                  ST_YMin(NEW.[{column}]), ST_YMax(NEW.[{column}]) \
                ); \
              END"
-        );
-        if exec_sql(db, ctx, &sql) != SQLITE_OK {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
+            );
+            if exec_sql(db, ctx, &sql) != SQLITE_OK {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
 
-        // 4. AFTER UPDATE trigger. Broad UPDATE so that rowid changes
-        // (UPDATE ... SET rowid = ... or via INTEGER PRIMARY KEY rewrite)
-        // still propagate to the index. The WHEN clause skips the DELETE
-        // plus INSERT when neither the geometry blob nor the rowid changed,
-        // which is the common case for UPDATEs that only touch unrelated
-        // columns.
-        let trigger_update = format!("{table}_{column}_update");
-        let sql = format!(
-            "CREATE TRIGGER IF NOT EXISTS [{trigger_update}] AFTER UPDATE ON [{table}] \
+            // 4. AFTER UPDATE trigger. Broad UPDATE so that rowid changes
+            // (UPDATE ... SET rowid = ... or via INTEGER PRIMARY KEY rewrite)
+            // still propagate to the index. The WHEN clause skips the DELETE
+            // plus INSERT when neither the geometry blob nor the rowid changed,
+            // which is the common case for UPDATEs that only touch unrelated
+            // columns.
+            let trigger_update = format!("{table}_{column}_update");
+            let sql = format!(
+                "CREATE TRIGGER IF NOT EXISTS [{trigger_update}] AFTER UPDATE ON [{table}] \
              WHEN OLD.[{column}] IS NOT NEW.[{column}] OR OLD.rowid IS NOT NEW.rowid \
              BEGIN \
                DELETE FROM [{rtree}] WHERE id = OLD.rowid; \
@@ -1599,43 +1712,44 @@ unsafe extern "C" fn create_spatial_index_xfunc(
                    ST_YMin(NEW.[{column}]), ST_YMax(NEW.[{column}]) \
                  WHERE NEW.[{column}] IS NOT NULL AND ST_IsEmpty(NEW.[{column}]) = 0; \
              END"
-        );
-        if exec_sql(db, ctx, &sql) != SQLITE_OK {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
+            );
+            if exec_sql(db, ctx, &sql) != SQLITE_OK {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
 
-        // 5. AFTER DELETE trigger
-        let trigger_delete = format!("{table}_{column}_delete");
-        let sql = format!(
-            "CREATE TRIGGER IF NOT EXISTS [{trigger_delete}] AFTER DELETE ON [{table}] \
+            // 5. AFTER DELETE trigger
+            let trigger_delete = format!("{table}_{column}_delete");
+            let sql = format!(
+                "CREATE TRIGGER IF NOT EXISTS [{trigger_delete}] AFTER DELETE ON [{table}] \
              BEGIN \
                DELETE FROM [{rtree}] WHERE id = OLD.rowid; \
              END"
-        );
-        if exec_sql(db, ctx, &sql) != SQLITE_OK {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
+            );
+            if exec_sql(db, ctx, &sql) != SQLITE_OK {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
 
-        let sql = format!(
-            "INSERT INTO [{SPATIAL_INDEX_CATALOG_TABLE}] (prefix, table_name, column_name) \
+            let sql = format!(
+                "INSERT INTO [{SPATIAL_INDEX_CATALOG_TABLE}] (prefix, table_name, column_name) \
              VALUES ('{prefix}', '{table}', '{column}') \
              ON CONFLICT(prefix) DO UPDATE SET \
              table_name = excluded.table_name, \
              column_name = excluded.column_name"
-        );
-        if exec_sql(db, ctx, &sql) != SQLITE_OK {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
+            );
+            if exec_sql(db, ctx, &sql) != SQLITE_OK {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
 
-        if exec_sql(db, ctx, &format!("RELEASE {savepoint}")) != SQLITE_OK {
-            return;
-        }
+            if exec_sql(db, ctx, &format!("RELEASE {savepoint}")) != SQLITE_OK {
+                return;
+            }
 
-        set_i32(ctx, 1);
-    });
+            set_i32(ctx, 1);
+        });
+    }
 }
 
 unsafe extern "C" fn drop_spatial_index_xfunc(
@@ -1643,76 +1757,79 @@ unsafe extern "C" fn drop_spatial_index_xfunc(
     _n: c_int,
     argv: *mut *mut sqlite3_value,
 ) {
-    xfunc_guard(ctx, "DropSpatialIndex", || {
-        let Some((table, column)) = get_table_column(ctx, argv, "DropSpatialIndex") else {
-            return;
-        };
+    unsafe {
+        xfunc_guard(ctx, "DropSpatialIndex", || {
+            let Some((table, column)) = get_table_column(ctx, argv, "DropSpatialIndex") else {
+                return;
+            };
 
-        let db = sqlite3_context_db_handle(ctx);
-        let prefix = format!("{table}_{column}");
-        let savepoint = "sqlitegis_drop_spatial_index";
+            let db = sqlite3_context_db_handle(ctx);
+            let prefix = format!("{table}_{column}");
+            let savepoint = "sqlitegis_drop_spatial_index";
 
-        if exec_sql(db, ctx, &format!("SAVEPOINT {savepoint}")) != SQLITE_OK {
-            return;
-        }
+            if exec_sql(db, ctx, &format!("SAVEPOINT {savepoint}")) != SQLITE_OK {
+                return;
+            }
 
-        if !ensure_spatial_index_catalog_table(db, ctx, "DropSpatialIndex") {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
-        if !validate_spatial_index_catalog_shape(db, ctx, "DropSpatialIndex") {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
-
-        let ownership = match ensure_spatial_index_objects_owned_by_table(
-            db,
-            ctx,
-            table,
-            column,
-            "DropSpatialIndex",
-        ) {
-            Some(v) => v,
-            None => {
+            if !ensure_spatial_index_catalog_table(db, ctx, "DropSpatialIndex") {
                 rollback_savepoint(db, ctx, savepoint);
                 return;
             }
-        };
-        if ownership == SpatialIndexOwnership::Absent {
-            if exec_sql(db, ctx, &format!("RELEASE {savepoint}")) != SQLITE_OK {
+            if !validate_spatial_index_catalog_shape(db, ctx, "DropSpatialIndex") {
+                rollback_savepoint(db, ctx, savepoint);
                 return;
             }
-            set_i32(ctx, 1);
-            return;
-        }
 
-        // Drop triggers first, then the R-tree table. Ownership has already
-        // been verified to avoid cross-table collisions on derived names.
-        for suffix in &["_insert", "_update", "_delete"] {
-            let sql = format!("DROP TRIGGER IF EXISTS [{prefix}{suffix}]");
+            let ownership = match ensure_spatial_index_objects_owned_by_table(
+                db,
+                ctx,
+                table,
+                column,
+                "DropSpatialIndex",
+            ) {
+                Some(v) => v,
+                None => {
+                    rollback_savepoint(db, ctx, savepoint);
+                    return;
+                }
+            };
+            if ownership == SpatialIndexOwnership::Absent {
+                if exec_sql(db, ctx, &format!("RELEASE {savepoint}")) != SQLITE_OK {
+                    return;
+                }
+                set_i32(ctx, 1);
+                return;
+            }
+
+            // Drop triggers first, then the R-tree table. Ownership has already
+            // been verified to avoid cross-table collisions on derived names.
+            for suffix in &["_insert", "_update", "_delete"] {
+                let sql = format!("DROP TRIGGER IF EXISTS [{prefix}{suffix}]");
+                if exec_sql(db, ctx, &sql) != SQLITE_OK {
+                    rollback_savepoint(db, ctx, savepoint);
+                    return;
+                }
+            }
+            let sql = format!("DROP TABLE IF EXISTS [{prefix}_rtree]");
             if exec_sql(db, ctx, &sql) != SQLITE_OK {
                 rollback_savepoint(db, ctx, savepoint);
                 return;
             }
-        }
-        let sql = format!("DROP TABLE IF EXISTS [{prefix}_rtree]");
-        if exec_sql(db, ctx, &sql) != SQLITE_OK {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
 
-        let sql = format!("DELETE FROM [{SPATIAL_INDEX_CATALOG_TABLE}] WHERE prefix = '{prefix}'");
-        if exec_sql(db, ctx, &sql) != SQLITE_OK {
-            rollback_savepoint(db, ctx, savepoint);
-            return;
-        }
+            let sql =
+                format!("DELETE FROM [{SPATIAL_INDEX_CATALOG_TABLE}] WHERE prefix = '{prefix}'");
+            if exec_sql(db, ctx, &sql) != SQLITE_OK {
+                rollback_savepoint(db, ctx, savepoint);
+                return;
+            }
 
-        if exec_sql(db, ctx, &format!("RELEASE {savepoint}")) != SQLITE_OK {
-            return;
-        }
+            if exec_sql(db, ctx, &format!("RELEASE {savepoint}")) != SQLITE_OK {
+                return;
+            }
 
-        set_i32(ctx, 1);
-    });
+            set_i32(ctx, 1);
+        });
+    }
 }
 
 // Registration
@@ -1777,21 +1894,23 @@ const _: () =
     assert_catalog_callback_parity(SQLITE_DIRECT_ONLY_FUNCTIONS, SQLITE_DIRECT_ONLY_CALLBACKS);
 
 unsafe fn reg(db: *mut sqlite3, name: &str, n_arg: c_int, flags: c_int, xfunc: XFunc) -> c_int {
-    let c_name = match CString::new(name) {
-        Ok(v) => v,
-        Err(_) => return SQLITE_ERROR,
-    };
-    sqlite3_create_function_v2(
-        db,
-        c_name.as_ptr(),
-        n_arg,
-        flags,
-        std::ptr::null_mut(),
-        Some(xfunc),
-        None,
-        None,
-        None,
-    )
+    unsafe {
+        let c_name = match CString::new(name) {
+            Ok(v) => v,
+            Err(_) => return SQLITE_ERROR,
+        };
+        sqlite3_create_function_v2(
+            db,
+            c_name.as_ptr(),
+            n_arg,
+            flags,
+            std::ptr::null_mut(),
+            Some(xfunc),
+            None,
+            None,
+            None,
+        )
+    }
 }
 
 /// Register all SQLiteGIS spatial functions into an open SQLite database.
@@ -1839,33 +1958,35 @@ unsafe fn reg(db: *mut sqlite3, name: &str, n_arg: c_int, flags: c_int, xfunc: X
 /// }
 /// ```
 pub unsafe fn register_functions(db: *mut sqlite3) -> c_int {
-    for callback in SQLITE_DETERMINISTIC_CALLBACKS {
-        let rc = reg(
-            db,
-            callback.name,
-            callback.n_arg as c_int,
-            DET,
-            callback.xfunc,
-        );
-        if rc != SQLITE_OK {
-            return rc;
+    unsafe {
+        for callback in SQLITE_DETERMINISTIC_CALLBACKS {
+            let rc = reg(
+                db,
+                callback.name,
+                callback.n_arg as c_int,
+                DET,
+                callback.xfunc,
+            );
+            if rc != SQLITE_OK {
+                return rc;
+            }
         }
-    }
 
-    for callback in SQLITE_DIRECT_ONLY_CALLBACKS {
-        let rc = reg(
-            db,
-            callback.name,
-            callback.n_arg as c_int,
-            DIRECT,
-            callback.xfunc,
-        );
-        if rc != SQLITE_OK {
-            return rc;
+        for callback in SQLITE_DIRECT_ONLY_CALLBACKS {
+            let rc = reg(
+                db,
+                callback.name,
+                callback.n_arg as c_int,
+                DIRECT,
+                callback.xfunc,
+            );
+            if rc != SQLITE_OK {
+                return rc;
+            }
         }
-    }
 
-    SQLITE_OK
+        SQLITE_OK
+    }
 }
 
 /// Register SQLiteGIS as a SQLite auto-extension: from the next call onward,
@@ -1920,7 +2041,7 @@ unsafe extern "C" fn sqlitegis_auto_extension_init(
     _pz_err_msg: *mut *mut std::os::raw::c_char,
     _p_api: *const sqlite3_api_routines,
 ) -> c_int {
-    register_functions(db)
+    unsafe { register_functions(db) }
 }
 
 // C entry point for loadable extension (native only)
@@ -1939,9 +2060,11 @@ pub unsafe extern "C" fn sqlite3_sqlitegis_init(
     _pz_err_msg: *mut *mut std::ffi::c_char,
     _p_api: *mut sqlite3_api_routines,
 ) -> c_int {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| register_functions(db))) {
-        Ok(rc) => rc,
-        Err(_) => SQLITE_ERROR,
+    unsafe {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| register_functions(db))) {
+            Ok(rc) => rc,
+            Err(_) => SQLITE_ERROR,
+        }
     }
 }
 
@@ -1957,9 +2080,11 @@ mod tests {
         _n: c_int,
         _argv: *mut *mut sqlite3_value,
     ) {
-        xfunc_guard(ctx, "GuardedConstant", || {
-            set_i32(ctx, 7);
-        });
+        unsafe {
+            xfunc_guard(ctx, "GuardedConstant", || {
+                set_i32(ctx, 7);
+            });
+        }
     }
 
     unsafe extern "C" fn guarded_panic_xfunc(
@@ -1967,45 +2092,53 @@ mod tests {
         _n: c_int,
         _argv: *mut *mut sqlite3_value,
     ) {
-        xfunc_guard(ctx, "GuardedPanic", || {
-            panic!("boom");
-        });
+        unsafe {
+            xfunc_guard(ctx, "GuardedPanic", || {
+                panic!("boom");
+            });
+        }
     }
 
     unsafe fn open_db() -> *mut sqlite3 {
-        let mut db = ptr::null_mut();
-        let path = CString::new(":memory:").expect("valid sqlite path");
-        assert_eq!(sqlite3_open(path.as_ptr(), &mut db), SQLITE_OK);
-        db
+        unsafe {
+            let mut db = ptr::null_mut();
+            let path = CString::new(":memory:").expect("valid sqlite path");
+            assert_eq!(sqlite3_open(path.as_ptr(), &mut db), SQLITE_OK);
+            db
+        }
     }
 
     unsafe fn close_db(db: *mut sqlite3) {
-        assert_eq!(sqlite3_close(db), SQLITE_OK);
+        unsafe {
+            assert_eq!(sqlite3_close(db), SQLITE_OK);
+        }
     }
 
     unsafe fn query_i64(db: *mut sqlite3, sql: &str) -> Result<i64, String> {
-        let sql_c = CString::new(sql).expect("valid SQL");
-        let mut stmt = ptr::null_mut();
-        let rc = sqlite3_prepare_v2(db, sql_c.as_ptr(), -1, &mut stmt, ptr::null_mut());
-        if rc != SQLITE_OK {
-            let err = CStr::from_ptr(sqlite3_errmsg(db))
-                .to_string_lossy()
-                .into_owned();
-            return Err(err);
-        }
+        unsafe {
+            let sql_c = CString::new(sql).expect("valid SQL");
+            let mut stmt = ptr::null_mut();
+            let rc = sqlite3_prepare_v2(db, sql_c.as_ptr(), -1, &mut stmt, ptr::null_mut());
+            if rc != SQLITE_OK {
+                let err = CStr::from_ptr(sqlite3_errmsg(db))
+                    .to_string_lossy()
+                    .into_owned();
+                return Err(err);
+            }
 
-        let step = sqlite3_step(stmt);
-        if step != SQLITE_ROW {
+            let step = sqlite3_step(stmt);
+            if step != SQLITE_ROW {
+                sqlite3_finalize(stmt);
+                let err = CStr::from_ptr(sqlite3_errmsg(db))
+                    .to_string_lossy()
+                    .into_owned();
+                return Err(err);
+            }
+
+            let value = sqlite3_column_int64(stmt, 0);
             sqlite3_finalize(stmt);
-            let err = CStr::from_ptr(sqlite3_errmsg(db))
-                .to_string_lossy()
-                .into_owned();
-            return Err(err);
+            Ok(value)
         }
-
-        let value = sqlite3_column_int64(stmt, 0);
-        sqlite3_finalize(stmt);
-        Ok(value)
     }
 
     #[derive(Debug)]
@@ -2018,57 +2151,59 @@ mod tests {
     }
 
     unsafe fn query_value(db: *mut sqlite3, sql: &str) -> Result<QueryValue, String> {
-        let sql_c = CString::new(sql).expect("valid SQL");
-        let mut stmt = ptr::null_mut();
-        let rc = sqlite3_prepare_v2(db, sql_c.as_ptr(), -1, &mut stmt, ptr::null_mut());
-        if rc != SQLITE_OK {
-            let err = CStr::from_ptr(sqlite3_errmsg(db))
-                .to_string_lossy()
-                .into_owned();
-            return Err(err);
-        }
-
-        let step = sqlite3_step(stmt);
-        if step != SQLITE_ROW {
-            sqlite3_finalize(stmt);
-            let err = CStr::from_ptr(sqlite3_errmsg(db))
-                .to_string_lossy()
-                .into_owned();
-            return Err(err);
-        }
-
-        let value = match sqlite3_column_type(stmt, 0) {
-            SQLITE_NULL => QueryValue::Null,
-            SQLITE_INTEGER => QueryValue::Integer(sqlite3_column_int64(stmt, 0)),
-            SQLITE_FLOAT => QueryValue::Float(sqlite3_column_double(stmt, 0)),
-            SQLITE_TEXT => {
-                let ptr = sqlite3_column_text(stmt, 0);
-                if ptr.is_null() {
-                    sqlite3_finalize(stmt);
-                    return Err("unexpected NULL text pointer for SQLITE_TEXT".to_string());
-                }
-                QueryValue::Text(CStr::from_ptr(ptr.cast()).to_string_lossy().into_owned())
+        unsafe {
+            let sql_c = CString::new(sql).expect("valid SQL");
+            let mut stmt = ptr::null_mut();
+            let rc = sqlite3_prepare_v2(db, sql_c.as_ptr(), -1, &mut stmt, ptr::null_mut());
+            if rc != SQLITE_OK {
+                let err = CStr::from_ptr(sqlite3_errmsg(db))
+                    .to_string_lossy()
+                    .into_owned();
+                return Err(err);
             }
-            SQLITE_BLOB => {
-                let len = sqlite3_column_bytes(stmt, 0) as usize;
-                let ptr = sqlite3_column_blob(stmt, 0) as *const u8;
-                if len == 0 {
-                    QueryValue::Blob(Vec::new())
-                } else if ptr.is_null() {
-                    sqlite3_finalize(stmt);
-                    return Err("unexpected NULL blob pointer for SQLITE_BLOB".to_string());
-                } else {
-                    QueryValue::Blob(std::slice::from_raw_parts(ptr, len).to_vec())
-                }
-            }
-            other => {
+
+            let step = sqlite3_step(stmt);
+            if step != SQLITE_ROW {
                 sqlite3_finalize(stmt);
-                return Err(format!("unexpected SQLite type code: {other}"));
+                let err = CStr::from_ptr(sqlite3_errmsg(db))
+                    .to_string_lossy()
+                    .into_owned();
+                return Err(err);
             }
-        };
 
-        sqlite3_finalize(stmt);
-        Ok(value)
+            let value = match sqlite3_column_type(stmt, 0) {
+                SQLITE_NULL => QueryValue::Null,
+                SQLITE_INTEGER => QueryValue::Integer(sqlite3_column_int64(stmt, 0)),
+                SQLITE_FLOAT => QueryValue::Float(sqlite3_column_double(stmt, 0)),
+                SQLITE_TEXT => {
+                    let ptr = sqlite3_column_text(stmt, 0);
+                    if ptr.is_null() {
+                        sqlite3_finalize(stmt);
+                        return Err("unexpected NULL text pointer for SQLITE_TEXT".to_string());
+                    }
+                    QueryValue::Text(CStr::from_ptr(ptr.cast()).to_string_lossy().into_owned())
+                }
+                SQLITE_BLOB => {
+                    let len = sqlite3_column_bytes(stmt, 0) as usize;
+                    let ptr = sqlite3_column_blob(stmt, 0) as *const u8;
+                    if len == 0 {
+                        QueryValue::Blob(Vec::new())
+                    } else if ptr.is_null() {
+                        sqlite3_finalize(stmt);
+                        return Err("unexpected NULL blob pointer for SQLITE_BLOB".to_string());
+                    } else {
+                        QueryValue::Blob(std::slice::from_raw_parts(ptr, len).to_vec())
+                    }
+                }
+                other => {
+                    sqlite3_finalize(stmt);
+                    return Err(format!("unexpected SQLite type code: {other}"));
+                }
+            };
+
+            sqlite3_finalize(stmt);
+            Ok(value)
+        }
     }
 
     fn assert_semantic_expectation(

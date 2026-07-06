@@ -29,20 +29,22 @@ use crate::core::ewkb::{extract_mbr, parse_ewkb_pair};
 /// assert!(!st_intersects(&a, &far).unwrap());
 /// ```
 pub fn st_intersects(a: &[u8], b: &[u8]) -> Result<bool> {
-    // MBR-only fastpath. Walking the EWKB bytes for just the bbox is
-    // 10-100x cheaper than fully decoding both geometries, so on the
-    // common "filter many points against one window" workload where most
-    // rows are negative this short-circuits the full intersect test for
-    // the vast majority of calls. Falls through to the full path when
-    // either bbox cannot be computed (malformed blob) or the bboxes
-    // actually do overlap.
-    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
-        if !ra.intersects(&rb) {
-            return Ok(false);
+    super::catch_geo("ST_Intersects", || {
+        // MBR-only fastpath. Walking the EWKB bytes for just the bbox is
+        // 10-100x cheaper than fully decoding both geometries, so on the
+        // common "filter many points against one window" workload where most
+        // rows are negative this short-circuits the full intersect test for
+        // the vast majority of calls. Falls through to the full path when
+        // either bbox cannot be computed (malformed blob) or the bboxes
+        // actually do overlap.
+        if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+            if !ra.intersects(&rb) {
+                return Ok(false);
+            }
         }
-    }
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    Ok(ga.intersects(&gb))
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        Ok(ga.intersects(&gb))
+    })
 }
 
 /// ST_Contains: true if A completely contains B (B's boundary subset of A's interior).
@@ -61,18 +63,20 @@ pub fn st_intersects(a: &[u8], b: &[u8]) -> Result<bool> {
 /// assert!(!st_contains(&poly, &outside).unwrap());
 /// ```
 pub fn st_contains(a: &[u8], b: &[u8]) -> Result<bool> {
-    // MBR-only fastpath. If A's bbox does not fully contain B's bbox,
-    // A cannot contain B. Walks the EWKB bytes for just the bbox and
-    // short-circuits the full decode + contains test for the common
-    // "filter many points against one window" workload where most rows
-    // fall outside the LHS bbox.
-    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
-        if !ra.contains(&rb) {
-            return Ok(false);
+    super::catch_geo("ST_Contains", || {
+        // MBR-only fastpath. If A's bbox does not fully contain B's bbox,
+        // A cannot contain B. Walks the EWKB bytes for just the bbox and
+        // short-circuits the full decode + contains test for the common
+        // "filter many points against one window" workload where most rows
+        // fall outside the LHS bbox.
+        if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+            if !ra.contains(&rb) {
+                return Ok(false);
+            }
         }
-    }
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    Ok(ga.contains(&gb))
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        Ok(ga.contains(&gb))
+    })
 }
 
 /// ST_Within: true if A is completely inside B.
@@ -220,13 +224,15 @@ pub fn st_covers(a: &[u8], b: &[u8]) -> Result<bool> {
     // A cannot cover B. Same shortcut as `st_contains`; covers is a
     // slightly more permissive variant of contains so the necessary
     // condition is identical. `st_covered_by` inherits via delegation.
-    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
-        if !ra.contains(&rb) {
-            return Ok(false);
+    super::catch_geo("ST_Covers", || {
+        if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+            if !ra.contains(&rb) {
+                return Ok(false);
+            }
         }
-    }
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    Ok(ga.relate(&gb).is_covers())
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        Ok(ga.relate(&gb).is_covers())
+    })
 }
 
 /// ST_CoveredBy: B covers A.
@@ -270,13 +276,15 @@ pub fn st_equals(a: &[u8], b: &[u8]) -> Result<bool> {
     // imply different point sets, so we can short-circuit to false.
     // Stronger than the disjoint-MBR check used in `st_intersects`:
     // even bboxes that overlap but differ in any corner fire this.
-    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
-        if ra.min() != rb.min() || ra.max() != rb.max() {
-            return Ok(false);
+    super::catch_geo("ST_Equals", || {
+        if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+            if ra.min() != rb.min() || ra.max() != rb.max() {
+                return Ok(false);
+            }
         }
-    }
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    Ok(ga.relate(&gb).is_equal_topo())
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        Ok(ga.relate(&gb).is_equal_topo())
+    })
 }
 
 /// ST_Touches: geometries share boundary points but not interior points.
@@ -299,14 +307,15 @@ pub fn st_touches(a: &[u8], b: &[u8]) -> Result<bool> {
     // MBR-only fastpath. MBR-disjoint geometries cannot touch (touching
     // requires at least one shared boundary point). Same shortcut shape
     // as `st_intersects`.
-    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
-        if !ra.intersects(&rb) {
-            return Ok(false);
+    super::catch_geo("ST_Touches", || {
+        if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+            if !ra.intersects(&rb) {
+                return Ok(false);
+            }
         }
-    }
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    // geo 0.32: is_touches() takes 0 arguments
-    Ok(ga.relate(&gb).is_touches())
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        Ok(ga.relate(&gb).is_touches())
+    })
 }
 
 /// ST_Crosses: geometries have some interior points in common but not all.
@@ -326,8 +335,10 @@ pub fn st_touches(a: &[u8], b: &[u8]) -> Result<bool> {
 /// assert!(!st_crosses(&away, &poly).unwrap());
 /// ```
 pub fn st_crosses(a: &[u8], b: &[u8]) -> Result<bool> {
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    Ok(ga.relate(&gb).is_crosses())
+    super::catch_geo("ST_Crosses", || {
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        Ok(ga.relate(&gb).is_crosses())
+    })
 }
 
 /// ST_Overlaps: geometries overlap (same dimension, share interior, neither contains the other).
@@ -349,13 +360,15 @@ pub fn st_crosses(a: &[u8], b: &[u8]) -> Result<bool> {
 pub fn st_overlaps(a: &[u8], b: &[u8]) -> Result<bool> {
     // MBR-only fastpath. MBR-disjoint geometries cannot overlap
     // (overlapping requires shared interior points).
-    if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
-        if !ra.intersects(&rb) {
-            return Ok(false);
+    super::catch_geo("ST_Overlaps", || {
+        if let (Ok(Some(ra)), Ok(Some(rb))) = (extract_mbr(a), extract_mbr(b)) {
+            if !ra.intersects(&rb) {
+                return Ok(false);
+            }
         }
-    }
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    Ok(ga.relate(&gb).is_overlaps())
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        Ok(ga.relate(&gb).is_overlaps())
+    })
 }
 
 /// Convert a `Dimensions` entry to its DE-9IM character.
@@ -395,8 +408,10 @@ fn matrix_string(matrix: &geo::algorithm::relate::IntersectionMatrix) -> String 
 /// assert_eq!(matrix, "0FFFFFFF2");
 /// ```
 pub fn st_relate(a: &[u8], b: &[u8]) -> Result<String> {
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    Ok(matrix_string(&ga.relate(&gb)))
+    super::catch_geo("ST_Relate", || {
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        Ok(matrix_string(&ga.relate(&gb)))
+    })
 }
 
 /// ST_Relate (pattern): check a DE-9IM pattern string against two geometries.
@@ -413,11 +428,13 @@ pub fn st_relate(a: &[u8], b: &[u8]) -> Result<String> {
 /// assert!(st_relate_match_geoms(&a, &b, "T*****FF*").unwrap());
 /// ```
 pub fn st_relate_match_geoms(a: &[u8], b: &[u8], pattern: &str) -> Result<bool> {
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    // Use geo's built-in pattern matching, which validates `pattern`.
-    ga.relate(&gb)
-        .matches(pattern)
-        .map_err(|e| SqliteGisError::InvalidInput(format!("invalid DE-9IM pattern: {e}")))
+    super::catch_geo("ST_Relate", || {
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        // Use geo's built-in pattern matching, which validates `pattern`.
+        ga.relate(&gb)
+            .matches(pattern)
+            .map_err(|e| SqliteGisError::InvalidInput(format!("invalid DE-9IM pattern: {e}")))
+    })
 }
 
 /// ST_RelateMatch: match a DE-9IM matrix string against a pattern string.

@@ -34,6 +34,39 @@ fn require_non_empty_point(point: Point<f64>, fn_name: &str) -> Result<Point<f64
     Ok(point)
 }
 
+fn latitude_in_range(lat: f64) -> bool {
+    (-90.0..=90.0).contains(&lat)
+}
+
+/// Reject a point whose latitude is outside `[-90, 90]`, where `geo`'s Karney
+/// `Geodesic` returns `NaN` and `Haversine` a wrong finite value. Longitude is
+/// periodic and left to the algorithms.
+// TODO(georust/geo#1553): drop the Karney half once fixed and released. The
+// Haversine paths still need it (wrong finite value, not NaN).
+fn require_geographic_latitude(point: Point<f64>, fn_name: &str) -> Result<Point<f64>> {
+    if !latitude_in_range(point.y()) {
+        return Err(SqliteGisError::InvalidInput(format!(
+            "{fn_name}: latitude {} is outside the valid range [-90, 90]",
+            point.y()
+        )));
+    }
+    Ok(point)
+}
+
+/// Reject a line whose any vertex latitude falls outside `[-90, 90]`, so
+/// `Haversine` length is not computed over invalid geographic coordinates.
+fn require_geographic_line_latitudes(ls: &geo::LineString<f64>, fn_name: &str) -> Result<()> {
+    for coord in ls.coords() {
+        if !latitude_in_range(coord.y) {
+            return Err(SqliteGisError::InvalidInput(format!(
+                "{fn_name}: latitude {} is outside the valid range [-90, 90]",
+                coord.y
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// ST_Area: planar area (square units of the CRS).
 ///
 /// # Example
@@ -122,10 +155,12 @@ fn euclidean_geometry_distance(a: &Geometry<f64>, b: &Geometry<f64>) -> f64 {
 /// assert!((st_distance(&a, &b).unwrap() - 5.0).abs() < 1e-10);
 /// ```
 pub fn st_distance(a: &[u8], b: &[u8]) -> Result<f64> {
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    require_non_empty_geometry(&ga, "ST_Distance")?;
-    require_non_empty_geometry(&gb, "ST_Distance")?;
-    Ok(euclidean_geometry_distance(&ga, &gb))
+    crate::core::functions::catch_geo("ST_Distance", || {
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        require_non_empty_geometry(&ga, "ST_Distance")?;
+        require_non_empty_geometry(&gb, "ST_Distance")?;
+        Ok(euclidean_geometry_distance(&ga, &gb))
+    })
 }
 
 /// ST_Centroid: geometric centroid of any geometry.
@@ -143,11 +178,13 @@ pub fn st_distance(a: &[u8], b: &[u8]) -> Result<f64> {
 /// assert!((st_y(&c).unwrap().unwrap() - 1.0).abs() < 1e-10);
 /// ```
 pub fn st_centroid(blob: &[u8]) -> Result<Vec<u8>> {
-    let (geom, srid) = parse_ewkb(blob)?;
-    let c = geom
-        .centroid()
-        .ok_or_else(|| SqliteGisError::wrong_type("non-empty geometry", &geom))?;
-    write_ewkb(&Geometry::Point(c), srid)
+    crate::core::functions::catch_geo("ST_Centroid", || {
+        let (geom, srid) = parse_ewkb(blob)?;
+        let c = geom
+            .centroid()
+            .ok_or_else(|| SqliteGisError::wrong_type("non-empty geometry", &geom))?;
+        write_ewkb(&Geometry::Point(c), srid)
+    })
 }
 
 /// ST_PointOnSurface: a point guaranteed to lie on the geometry.
@@ -165,11 +202,13 @@ pub fn st_centroid(blob: &[u8]) -> Result<Vec<u8>> {
 /// assert!(st_within(&pt, &poly).unwrap());
 /// ```
 pub fn st_point_on_surface(blob: &[u8]) -> Result<Vec<u8>> {
-    let (geom, srid) = parse_ewkb(blob)?;
-    let p = geom
-        .interior_point()
-        .ok_or_else(|| SqliteGisError::wrong_type("non-empty geometry", &geom))?;
-    write_ewkb(&Geometry::Point(p), srid)
+    crate::core::functions::catch_geo("ST_PointOnSurface", || {
+        let (geom, srid) = parse_ewkb(blob)?;
+        let p = geom
+            .interior_point()
+            .ok_or_else(|| SqliteGisError::wrong_type("non-empty geometry", &geom))?;
+        write_ewkb(&Geometry::Point(p), srid)
+    })
 }
 
 /// ST_HausdorffDistance: Hausdorff distance between two geometries.
@@ -185,10 +224,12 @@ pub fn st_point_on_surface(blob: &[u8]) -> Result<Vec<u8>> {
 /// assert!((st_hausdorff_distance(&a, &b).unwrap() - 1.0).abs() < 1e-10);
 /// ```
 pub fn st_hausdorff_distance(a: &[u8], b: &[u8]) -> Result<f64> {
-    let (ga, gb, _) = parse_ewkb_pair(a, b)?;
-    require_non_empty_geometry(&ga, "ST_HausdorffDistance")?;
-    require_non_empty_geometry(&gb, "ST_HausdorffDistance")?;
-    Ok(ga.hausdorff_distance(&gb))
+    crate::core::functions::catch_geo("ST_HausdorffDistance", || {
+        let (ga, gb, _) = parse_ewkb_pair(a, b)?;
+        require_non_empty_geometry(&ga, "ST_HausdorffDistance")?;
+        require_non_empty_geometry(&gb, "ST_HausdorffDistance")?;
+        Ok(ga.hausdorff_distance(&gb))
+    })
 }
 
 // Bounding-box accessors
@@ -314,8 +355,14 @@ fn parse_two_geographic_points(
     let (ga, srid_a) = parse_ewkb(a)?;
     let (gb, srid_b) = parse_ewkb(b)?;
     let srid = ensure_matching_geographic_srid(srid_a, srid_b, fn_name)?;
-    let pa = require_non_empty_point(require_point(ga)?, fn_name)?;
-    let pb = require_non_empty_point(require_point(gb)?, fn_name)?;
+    let pa = require_geographic_latitude(
+        require_non_empty_point(require_point(ga)?, fn_name)?,
+        fn_name,
+    )?;
+    let pb = require_geographic_latitude(
+        require_non_empty_point(require_point(gb)?, fn_name)?,
+        fn_name,
+    )?;
     Ok((pa, pb, srid))
 }
 
@@ -371,8 +418,16 @@ pub fn st_length_sphere(blob: &[u8]) -> Result<f64> {
     let (geom, srid) = parse_ewkb(blob)?;
     ensure_geographic_srid(srid, "ST_LengthSphere")?;
     match &geom {
-        Geometry::LineString(ls) => Ok(Haversine.length(ls)),
-        Geometry::MultiLineString(mls) => Ok(mls.0.iter().map(|ls| Haversine.length(ls)).sum()),
+        Geometry::LineString(ls) => {
+            require_geographic_line_latitudes(ls, "ST_LengthSphere")?;
+            Ok(Haversine.length(ls))
+        }
+        Geometry::MultiLineString(mls) => {
+            for ls in &mls.0 {
+                require_geographic_line_latitudes(ls, "ST_LengthSphere")?;
+            }
+            Ok(mls.0.iter().map(|ls| Haversine.length(ls)).sum())
+        }
         other => Err(SqliteGisError::wrong_type(
             "LineString or MultiLineString",
             other,
@@ -427,7 +482,10 @@ pub fn st_project(origin: &[u8], distance: f64, azimuth: f64) -> Result<Vec<u8>>
     }
     let (go, srid) = parse_ewkb(origin)?;
     ensure_geographic_srid(srid, "ST_Project")?;
-    let po = require_non_empty_point(require_point(go)?, "ST_Project")?;
+    let po = require_geographic_latitude(
+        require_non_empty_point(require_point(go)?, "ST_Project")?,
+        "ST_Project",
+    )?;
     let dest: Point<f64> = Geodesic.destination(po, azimuth.to_degrees(), distance);
     write_ewkb(&Geometry::Point(dest), srid)
 }
@@ -449,19 +507,21 @@ pub fn st_project(origin: &[u8], distance: f64, azimuth: f64) -> Result<Vec<u8>>
 /// assert!((st_y(&cp).unwrap().unwrap() - 0.0).abs() < 1e-10);
 /// ```
 pub fn st_closest_point(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
-    let (ga, gb, srid) = parse_ewkb_pair(a, b)?;
-    require_non_empty_geometry(&ga, "ST_ClosestPoint")?;
-    let pb = require_non_empty_point(require_point(gb)?, "ST_ClosestPoint")?;
-    let cp = ga.closest_point(&pb);
-    let pt = match cp {
-        Closest::Intersection(p) | Closest::SinglePoint(p) => p,
-        Closest::Indeterminate => {
-            return Err(SqliteGisError::InvalidInput(
-                "ST_ClosestPoint: unable to determine closest point".to_string(),
-            ))
-        }
-    };
-    write_ewkb(&Geometry::Point(pt), srid)
+    crate::core::functions::catch_geo("ST_ClosestPoint", || {
+        let (ga, gb, srid) = parse_ewkb_pair(a, b)?;
+        require_non_empty_geometry(&ga, "ST_ClosestPoint")?;
+        let pb = require_non_empty_point(require_point(gb)?, "ST_ClosestPoint")?;
+        let cp = ga.closest_point(&pb);
+        let pt = match cp {
+            Closest::Intersection(p) | Closest::SinglePoint(p) => p,
+            Closest::Indeterminate => {
+                return Err(SqliteGisError::InvalidInput(
+                    "ST_ClosestPoint: unable to determine closest point".to_string(),
+                ))
+            }
+        };
+        write_ewkb(&Geometry::Point(pt), srid)
+    })
 }
 
 #[cfg(test)]
@@ -470,6 +530,33 @@ mod tests {
     use crate::core::functions::accessors::{st_x, st_y};
     use crate::core::functions::constructors::st_point;
     use crate::core::functions::io::geom_from_text;
+
+    /// EWKB for a polygon whose ring has a NaN vertex, so `is_closed()` (a
+    /// `first == last` compare) is false and geo's centroid `assert!` aborts.
+    /// Fuzzer-found.
+    fn nan_ring_polygon() -> Vec<u8> {
+        use crate::core::ewkb::WKB_POLYGON;
+        let mut blob = vec![0x01u8];
+        blob.extend_from_slice(&WKB_POLYGON.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes()); // one ring
+        blob.extend_from_slice(&1u32.to_le_bytes()); // a single NaN point
+        blob.extend_from_slice(&f64::NAN.to_le_bytes());
+        blob.extend_from_slice(&f64::NAN.to_le_bytes());
+        blob
+    }
+
+    #[test]
+    fn st_centroid_degenerate_ring_does_not_panic() {
+        // Must come back as a recoverable error, not abort the process.
+        let blob = nan_ring_polygon();
+        assert!(st_centroid(&blob).is_err());
+    }
+
+    #[test]
+    fn st_point_on_surface_degenerate_ring_does_not_panic() {
+        let blob = nan_ring_polygon();
+        assert!(st_point_on_surface(&blob).is_err());
+    }
 
     // -- Wrong-type errors ------------------------------------------
 
@@ -497,6 +584,37 @@ mod tests {
         let line = geom_from_text("LINESTRING(0 0,1 1)", None).unwrap();
         let pt = st_point(0.0, 0.0, None).unwrap();
         assert!(st_distance_spheroid(&line, &pt).is_err());
+    }
+
+    #[test]
+    fn geodesic_out_of_range_latitude_errors_not_nan() {
+        // Latitude past the pole drives geo's Karney geodesic to NaN; the
+        // geographic functions must reject it with an error instead. The
+        // fuzzer found this (a=(0,-90.00000004)).
+        let valid = st_point(2.3522, 48.8566, Some(4326)).unwrap();
+        for bad in [
+            st_point(0.0, 95.0, Some(4326)).unwrap(),
+            st_point(0.0, -90.0001, Some(4326)).unwrap(),
+        ] {
+            assert!(st_distance_spheroid(&bad, &valid).is_err());
+            assert!(st_distance_sphere(&bad, &valid).is_err());
+            assert!(st_azimuth(&bad, &valid).is_err());
+            assert!(st_project(&bad, 1000.0, 0.5).is_err());
+        }
+    }
+
+    #[test]
+    fn st_length_sphere_out_of_range_latitude_errors() {
+        // Haversine silently returns a wrong finite length past the poles, so
+        // ST_LengthSphere must reject a line with an out-of-range vertex.
+        let bad = geom_from_text("LINESTRING(0 0, 10 95)", Some(4326)).unwrap();
+        assert!(st_length_sphere(&bad).is_err());
+        let bad_multi =
+            geom_from_text("MULTILINESTRING((0 0, 1 1),(2 2, 3 -91))", Some(4326)).unwrap();
+        assert!(st_length_sphere(&bad_multi).is_err());
+        // A valid line still works.
+        let ok = geom_from_text("LINESTRING(0 0, 10 10)", Some(4326)).unwrap();
+        assert!(st_length_sphere(&ok).unwrap() > 0.0);
     }
 
     #[test]
@@ -818,5 +936,34 @@ mod tests {
         let poly = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", Some(4326)).unwrap();
         let err = st_length_sphere(&poly).expect_err("polygon input must error");
         assert!(format!("{err}").contains("LineString or MultiLineString"));
+    }
+
+    #[test]
+    fn st_distance_sphere_second_point_bad_latitude() {
+        // Exercises parse_two_geographic_points line 362-365: require_geographic_latitude
+        // on the second point (pb path).
+        let valid = st_point(0.0, 0.0, Some(4326)).unwrap();
+        let bad = st_point(0.0, 100.0, Some(4326)).unwrap();
+        let err = st_distance_sphere(&valid, &bad).expect_err("bad latitude must error");
+        assert!(
+            format!("{err}").contains("latitude"),
+            "expected latitude error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn st_closest_point_nan_geometry_errors_at_parse() {
+        // NaN coordinates are rejected by reject_non_finite_coords in parse_ewkb,
+        // so they never reach the closest_point algorithm. The Indeterminate
+        // path (lines 518-520) is defensive code for geometries that geo's
+        // algorithm cannot resolve, but no known finite non-empty geometry
+        // triggers it in practice.
+        let nan_poly = nan_ring_polygon();
+        let pt = st_point(0.0, 0.0, None).unwrap();
+        let err = st_closest_point(&nan_poly, &pt).expect_err("NaN geometry must error");
+        assert!(
+            format!("{err}").contains("non-finite"),
+            "expected non-finite error, got: {err}"
+        );
     }
 }

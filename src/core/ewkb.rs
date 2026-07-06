@@ -10,7 +10,7 @@
 //!   \[i32\]: SRID (only when SRID flag set, in declared byte order)
 //!   \[rest\]: ISO WKB geometry payload
 
-use geo::{Coord, Geometry, Point, Rect};
+use geo::{Coord, CoordsIter, Geometry, Point, Rect};
 use geozero::wkb::Ewkb;
 use geozero::{CoordDimensions, ToGeo, ToWkb};
 
@@ -37,6 +37,14 @@ pub const WKB_MULTILINESTRING: u32 = 5;
 pub const WKB_MULTIPOLYGON: u32 = 6;
 /// ISO WKB geometry type code: GeometryCollection.
 pub const WKB_GEOMETRYCOLLECTION: u32 = 7;
+
+/// Max container nesting the EWKB parsers accept. `geozero`'s recursive
+/// `to_geo`/`to_wkt`/`to_json` overflow the stack around depth ~1500 (lower on
+/// WASM), so a crafted ~9 KB blob aborts the process. Real geometries nest a
+/// handful of levels, so this never bites legitimate data.
+// TODO(georust/geozero#299): relax the geozero-facing cap once #299 lands. The
+// cap on our own `walk_for_mbr` stays regardless.
+pub const MAX_NESTING_DEPTH: usize = 32;
 
 fn read_f64(bytes: [u8; 8], little_endian: bool) -> f64 {
     if little_endian {
@@ -112,10 +120,17 @@ pub fn is_empty_point_blob(blob: &[u8]) -> Result<bool> {
     point_is_empty_with_header(blob, &header)
 }
 
-/// Validate EWKB header + payload without forcing XY-only dimensions.
+/// Validate EWKB header + payload structure without forcing XY-only dimensions
+/// and without deserializing through geozero.
 ///
-/// This helper is intended for metadata-oriented functions that must verify
-/// wire correctness but do not need to deserialize into an XY geometry.
+/// Intended for metadata-oriented functions that read only the header and raw
+/// coordinate bytes (`ST_SRID`, `ST_NDims`, `ST_Z`, ...). It checks header
+/// well-formedness, bounded nesting depth, and that every element count fits
+/// inside the blob, and it accepts Z/M geometries. Crucially it never calls
+/// `to_geo`, so it cannot trigger geozero's count-driven pre-allocation: a
+/// hostile blob that would make `to_geo` reserve gigabytes is rejected or
+/// handled structurally here. Use [`validate_xy_ewkb_payload`] when you also
+/// need a full geozero decode (XY-only).
 ///
 /// ```
 /// use sqlitegis::core::ewkb::validate_ewkb_payload;
@@ -127,9 +142,7 @@ pub fn is_empty_point_blob(blob: &[u8]) -> Result<bool> {
 /// ```
 pub fn validate_ewkb_payload(blob: &[u8]) -> Result<EwkbHeader> {
     let header = parse_ewkb_header(blob)?;
-    if !point_is_empty_with_header(blob, &header)? {
-        let _: Geometry<f64> = Ewkb(blob).to_geo()?;
-    }
+    validate_payload_structure(blob, &header)?;
     Ok(header)
 }
 
@@ -149,7 +162,15 @@ pub fn validate_ewkb_payload(blob: &[u8]) -> Result<EwkbHeader> {
 /// ```
 pub fn validate_xy_ewkb_payload(blob: &[u8]) -> Result<EwkbHeader> {
     let header = validate_ewkb_payload(blob)?;
+    // Enforce XY BEFORE the geozero decode below: a Z/M element shifts
+    // coordinate offsets (24 vs 16 bytes) so this crate's structural walk and
+    // geozero's decoder disagree on where counts live, letting a crafted Z
+    // blob slip a huge count past validation and make `to_geo` pre-allocate
+    // gigabytes. Rejecting Z/M first keeps the decode bounded.
     ensure_xy_only(header.has_z, header.has_m)?;
+    if !point_is_empty_with_header(blob, &header)? {
+        let _: Geometry<f64> = Ewkb(blob).to_geo()?;
+    }
     Ok(header)
 }
 
@@ -302,8 +323,30 @@ pub fn parse_ewkb(blob: &[u8]) -> Result<(Geometry<f64>, Option<i32>)> {
     if point_is_empty_with_header(blob, &header)? {
         return Ok((Geometry::Point(Point::new(f64::NAN, f64::NAN)), header.srid));
     }
+    // Structurally validate before geozero's recursive decoder sees the blob.
+    validate_payload_structure(blob, &header)?;
     let geom = Ewkb(blob).to_geo()?;
+    reject_non_finite_coords(&geom)?;
     Ok((geom, header.srid))
+}
+
+/// Reject a non-finite coordinate (NaN or infinity), which aborts several `geo`
+/// algorithms (centroid `is_closed` assert, `lex_cmp` unwrap, relate graph).
+/// `POINT EMPTY` (`NaN NaN`) is handled earlier and never reaches here. Only
+/// `parse_ewkb` (the algorithm decode) calls this, so ingestion still stores
+/// non-finite coordinates like PostGIS.
+// TODO(georust/geo#1552, #1555, #1556): move from parse-time to the specific
+// algorithms once fixed and released.
+fn reject_non_finite_coords(geom: &Geometry<f64>) -> Result<()> {
+    if geom
+        .coords_iter()
+        .any(|c| !c.x.is_finite() || !c.y.is_finite())
+    {
+        return Err(SqliteGisError::InvalidInput(
+            "geometry has non-finite (NaN or infinite) coordinates".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Parse two EWKB blobs and enforce matching SRID.
@@ -354,6 +397,7 @@ pub fn extract_mbr(blob: &[u8]) -> Result<Option<Rect<f64>>> {
         header.has_z,
         header.has_m,
         header.little_endian,
+        0,
         &mut acc,
     )?;
     Ok(acc
@@ -418,9 +462,181 @@ fn read_u32_at(blob: &[u8], offset: usize, little_endian: bool) -> Result<u32> {
     })
 }
 
+/// Advance `offset` past `n_bytes`, checking overflow and presence.
+fn advance_past(blob: &[u8], offset: usize, n_bytes: usize) -> Result<usize> {
+    let end = offset.checked_add(n_bytes).ok_or_else(|| {
+        SqliteGisError::InvalidEwkb("EWKB coordinate run overflows the address space".to_string())
+    })?;
+    if end > blob.len() {
+        return Err(SqliteGisError::InvalidEwkb(format!(
+            "EWKB payload truncated: need {end} bytes, have {}",
+            blob.len()
+        )));
+    }
+    Ok(end)
+}
+
+/// Validate structure and nesting depth at `offset`, returning the offset past
+/// this geometry. Reads only counts (skipping coordinate bytes via
+/// [`advance_past`], with checked multiplication), bounded by the depth cap so
+/// it cannot itself overflow. Run before `geozero`'s unguarded decoders.
+fn validate_nesting(
+    blob: &[u8],
+    mut offset: usize,
+    geom_type: u32,
+    has_z: bool,
+    has_m: bool,
+    little_endian: bool,
+    depth: usize,
+) -> Result<usize> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(SqliteGisError::InvalidEwkb(format!(
+            "EWKB nesting depth exceeds limit of {MAX_NESTING_DEPTH}"
+        )));
+    }
+
+    let coord_size = 16 + 8 * usize::from(has_z) + 8 * usize::from(has_m);
+    // TODO(georust/geozero#297): bounding counts against remaining bytes is what
+    // stops geozero's `Vec::with_capacity(untrusted_count)` OOM. Drop once #297
+    // lands, or keep as defense in depth.
+    let coord_run = |count: usize| -> Result<usize> {
+        count.checked_mul(coord_size).ok_or_else(|| {
+            SqliteGisError::InvalidEwkb("EWKB coordinate count overflows the address space".into())
+        })
+    };
+
+    match geom_type {
+        WKB_POINT => offset = advance_past(blob, offset, coord_size)?,
+        WKB_LINESTRING => {
+            let npoints = read_u32_at(blob, offset, little_endian)? as usize;
+            offset += 4;
+            offset = advance_past(blob, offset, coord_run(npoints)?)?;
+        }
+        WKB_POLYGON => {
+            let nrings = read_u32_at(blob, offset, little_endian)? as usize;
+            offset += 4;
+            for _ in 0..nrings {
+                let npoints = read_u32_at(blob, offset, little_endian)? as usize;
+                offset += 4;
+                offset = advance_past(blob, offset, coord_run(npoints)?)?;
+            }
+        }
+        WKB_MULTIPOINT | WKB_MULTILINESTRING | WKB_MULTIPOLYGON | WKB_GEOMETRYCOLLECTION => {
+            // A typed Multi* holds only its matching element type (a
+            // GeometryCollection holds any). Enforcing this keeps the walk in
+            // lockstep with geozero so a type-inconsistent container cannot
+            // desync the two and slip a huge count into its pre-allocation.
+            let expected_element: Option<u32> = match geom_type {
+                WKB_MULTIPOINT => Some(WKB_POINT),
+                WKB_MULTILINESTRING => Some(WKB_LINESTRING),
+                WKB_MULTIPOLYGON => Some(WKB_POLYGON),
+                _ => None,
+            };
+            let count = read_u32_at(blob, offset, little_endian)? as usize;
+            offset += 4;
+            for _ in 0..count {
+                if blob.len() < offset + 5 {
+                    return Err(SqliteGisError::InvalidEwkb(format!(
+                        "nested WKB header truncated at offset {offset}"
+                    )));
+                }
+                let nested_le = match blob[offset] {
+                    0x01 => true,
+                    0x00 => false,
+                    other => {
+                        return Err(SqliteGisError::InvalidEwkb(format!(
+                            "invalid nested byte-order marker {other} at offset {offset}"
+                        )));
+                    }
+                };
+                let nested_type = read_u32_at(blob, offset + 1, nested_le)?;
+                let nested_geom_type = nested_type & 0x1FFFFFFF;
+                let nested_has_z = (nested_type & EWKB_Z_FLAG) != 0;
+                let nested_has_m = (nested_type & EWKB_M_FLAG) != 0;
+                if let Some(expected) = expected_element {
+                    if nested_geom_type != expected {
+                        return Err(SqliteGisError::InvalidEwkb(format!(
+                            "{} element has wrong type code {nested_geom_type}, expected {expected}",
+                            geom_type_name(geom_type),
+                        )));
+                    }
+                }
+                offset += 5;
+                // geozero skips a 4-byte SRID on a nested SRID-flagged header,
+                // so skip it here too to stay byte-aligned. Otherwise every
+                // later offset shifts and a huge count slips through.
+                if nested_type & EWKB_SRID_FLAG != 0 {
+                    offset = advance_past(blob, offset, 4)?;
+                }
+                offset = validate_nesting(
+                    blob,
+                    offset,
+                    nested_geom_type,
+                    nested_has_z,
+                    nested_has_m,
+                    nested_le,
+                    depth + 1,
+                )?;
+            }
+        }
+        other => {
+            return Err(SqliteGisError::InvalidEwkb(format!(
+                "unsupported geometry type code {other} during EWKB validation"
+            )));
+        }
+    }
+
+    Ok(offset)
+}
+
+/// Reject EWKB whose nesting exceeds [`MAX_NESTING_DEPTH`], guarding the
+/// recursive `geozero` decoders against stack overflow. Reads only structural
+/// counts, never the coordinate payload.
+///
+/// ```
+/// use sqlitegis::core::ewkb::ensure_ewkb_nesting_ok;
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let blob = geom_from_text("GEOMETRYCOLLECTION(POINT(1 2))", None).unwrap();
+/// assert!(ensure_ewkb_nesting_ok(&blob).is_ok());
+/// ```
+pub fn ensure_ewkb_nesting_ok(blob: &[u8]) -> Result<()> {
+    let header = parse_ewkb_header(blob)?;
+    validate_payload_structure(blob, &header)
+}
+
+/// Validate the payload: bounded depth, type-consistent containers, in-bounds
+/// counts, and exact consumption (no trailing bytes). Exact consumption keeps
+/// this aligned with geozero so a crafted blob cannot desync the two.
+fn validate_payload_structure(blob: &[u8], header: &EwkbHeader) -> Result<()> {
+    if point_is_empty_with_header(blob, header)? {
+        return Ok(());
+    }
+    let end = validate_nesting(
+        blob,
+        header.data_offset,
+        header.geom_type,
+        header.has_z,
+        header.has_m,
+        header.little_endian,
+        0,
+    )?;
+    if end != blob.len() {
+        return Err(SqliteGisError::InvalidEwkb(format!(
+            "EWKB has {} trailing byte(s) after the geometry",
+            blob.len().saturating_sub(end)
+        )));
+    }
+    Ok(())
+}
+
 /// Walk the WKB payload at `offset` for a geometry of the given type +
 /// dimensions, updating `acc` with each (X, Y) it sees. Returns the offset
 /// just past this geometry's payload (so container types can chain).
+///
+/// `depth` is rejected past [`MAX_NESTING_DEPTH`] so a nested blob cannot
+/// overflow the stack here.
+#[allow(clippy::too_many_arguments)]
 fn walk_for_mbr(
     blob: &[u8],
     mut offset: usize,
@@ -428,8 +644,15 @@ fn walk_for_mbr(
     has_z: bool,
     has_m: bool,
     little_endian: bool,
+    depth: usize,
     acc: &mut BboxAcc,
 ) -> Result<usize> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(SqliteGisError::InvalidEwkb(format!(
+            "EWKB nesting depth exceeds limit of {MAX_NESTING_DEPTH}"
+        )));
+    }
+
     let coord_size = 16 + 8 * usize::from(has_z) + 8 * usize::from(has_m);
 
     match geom_type {
@@ -496,6 +719,7 @@ fn walk_for_mbr(
                     nested_has_z,
                     nested_has_m,
                     nested_le,
+                    depth + 1,
                     acc,
                 )?;
             }
@@ -1232,6 +1456,97 @@ mod tests {
         );
     }
 
+    /// Build an EWKB nesting `wrappers` GeometryCollections around an
+    /// innermost empty GeometryCollection. The outermost is at depth 0, so the
+    /// innermost sits at depth `wrappers`.
+    fn nested_geometrycollection(wrappers: usize) -> Vec<u8> {
+        let mut blob = vec![0x01u8];
+        blob.extend_from_slice(&WKB_GEOMETRYCOLLECTION.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        for _ in 0..wrappers {
+            let mut outer = Vec::with_capacity(blob.len() + 9);
+            outer.push(0x01u8);
+            outer.extend_from_slice(&WKB_GEOMETRYCOLLECTION.to_le_bytes());
+            outer.extend_from_slice(&1u32.to_le_bytes());
+            outer.extend_from_slice(&blob);
+            blob = outer;
+        }
+        blob
+    }
+
+    #[test]
+    fn deeply_nested_ewkb_is_rejected_not_overflowed() {
+        // A blob with ~100k nested GeometryCollections used to overflow the
+        // stack in both our walker and geozero's decoder. Every parser must
+        // now reject it with an error instead of aborting the process.
+        let bomb = nested_geometrycollection(100_000);
+        assert!(matches!(
+            extract_mbr(&bomb),
+            Err(SqliteGisError::InvalidEwkb(_))
+        ));
+        assert!(matches!(
+            parse_ewkb(&bomb),
+            Err(SqliteGisError::InvalidEwkb(_))
+        ));
+        assert!(matches!(
+            validate_ewkb_payload(&bomb),
+            Err(SqliteGisError::InvalidEwkb(_))
+        ));
+        assert!(matches!(
+            ensure_ewkb_nesting_ok(&bomb),
+            Err(SqliteGisError::InvalidEwkb(_))
+        ));
+    }
+
+    #[test]
+    fn nesting_depth_boundary_is_inclusive() {
+        // The cap admits up to MAX_NESTING_DEPTH levels below the root and
+        // rejects one deeper, on both the MBR walker and the geozero guard.
+        let at_limit = nested_geometrycollection(MAX_NESTING_DEPTH);
+        extract_mbr(&at_limit).expect("nesting at the limit must be accepted");
+        ensure_ewkb_nesting_ok(&at_limit).expect("nesting at the limit must be accepted");
+
+        let over_limit = nested_geometrycollection(MAX_NESTING_DEPTH + 1);
+        assert!(extract_mbr(&over_limit).is_err());
+        assert!(ensure_ewkb_nesting_ok(&over_limit).is_err());
+    }
+
+    #[test]
+    fn malformed_z_blob_does_not_oom() {
+        // Fuzzer-reduced EWKB: a Z-flagged MultiPolygon whose crafted nested
+        // headers desync this crate's structural walk from geozero's decoder,
+        // sliding a ~2.1-billion element count into a position where `to_geo`
+        // pre-allocates tens of gigabytes. The structural validator must not
+        // call `to_geo` (so it returns without OOM), and the XY validator must
+        // reject the Z geometry before any decode.
+        const BLOB: &[u8] = &[
+            1, 6, 0, 0, 128, 4, 0, 0, 0, 0, 0, 0, 0, 1, 6, 128, 0, 255, 254, 255, 127, 0, 6, 0, 0,
+            131, 93, 0, 1, 1, 0, 0, 0, 0, 1, 6, 0, 1, 0, 64, 1, 6, 0, 1, 1, 0, 128, 93, 0, 1, 1, 0,
+            0, 0, 0, 1, 6, 0, 0, 1, 1, 0, 128, 0, 6, 0, 0, 128, 93, 0, 1, 1, 0, 0, 0, 0, 1, 6, 0,
+            45, 250, 255, 255, 0, 6, 0, 1, 1, 0, 0, 0, 247, 1, 6, 0, 0, 0, 0, 0, 0, 1, 6, 0, 0,
+            128,
+        ];
+        // Returns (Ok or Err) rather than aborting the process: reaching this
+        // line at all proves no OOM occurred.
+        let _ = validate_ewkb_payload(BLOB);
+        assert!(
+            validate_xy_ewkb_payload(BLOB).is_err(),
+            "Z geometry must be rejected before the geozero decode"
+        );
+    }
+
+    #[test]
+    fn shallow_nesting_round_trips() {
+        let blob = geom_from_text(
+            "GEOMETRYCOLLECTION(POINT(1 2), LINESTRING(0 0,1 1))",
+            Some(4326),
+        )
+        .expect("seed");
+        ensure_ewkb_nesting_ok(&blob).expect("shallow nesting is fine");
+        let (_geom, srid) = parse_ewkb(&blob).expect("shallow nesting parses");
+        assert_eq!(srid, Some(4326));
+    }
+
     #[test]
     fn extract_mbr_respects_big_endian_byte_order() {
         // Manually build a big-endian POINT(3 4) blob.
@@ -1549,5 +1864,161 @@ mod tests {
         let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", Some(0)).unwrap();
         let combined = concat_multipolygon_bodies(&a, &b).unwrap();
         assert_eq!(poly_count(&combined), 2);
+    }
+    // -- Hardening: validate_xy_ewkb_payload geozero decode path (line 173) --
+
+    #[test]
+    fn validate_xy_ewkb_payload_decodes_through_geozero() {
+        // A valid XY point that is NOT empty triggers the geozero decode at line 172-173.
+        let blob = geom_from_text("POINT(5 10)", Some(4326)).unwrap();
+        let hdr = validate_xy_ewkb_payload(&blob).unwrap();
+        assert_eq!(hdr.srid, Some(4326));
+        assert!(!hdr.has_z && !hdr.has_m);
+    }
+
+    // -- Hardening: read_u32_at truncated (lines 448-450) --
+
+    #[test]
+    fn read_u32_at_rejects_truncated_blob() {
+        // Polygon header with no ring count bytes: only 5 bytes total.
+        let blob: Vec<u8> = vec![0x01, 0x03, 0x00, 0x00, 0x00];
+        assert!(validate_ewkb_payload(&blob).is_err());
+    }
+
+    // -- Hardening: advance_past overflow (lines 468-469) --
+
+    #[test]
+    fn advance_past_catches_offset_overflow() {
+        // LineString with u32::MAX point count: count * 16 overflows.
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_LINESTRING.to_le_bytes());
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(validate_ewkb_payload(&blob).is_err());
+    }
+
+    // -- Hardening: validate_nesting nested header truncated (lines 539-541) --
+
+    #[test]
+    fn validate_nesting_rejects_truncated_nested_header() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        assert!(validate_ewkb_payload(&blob).is_err());
+    }
+
+    // -- Hardening: validate_nesting invalid byte-order marker (lines 546-549) --
+
+    #[test]
+    fn validate_nesting_rejects_invalid_nested_byte_order() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.push(0xFF);
+        blob.extend_from_slice(&WKB_POINT.to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        blob.extend_from_slice(&2.0f64.to_le_bytes());
+        assert!(validate_ewkb_payload(&blob).is_err());
+    }
+
+    // -- Hardening: validate_nesting unsupported type (lines 582-585) --
+
+    #[test]
+    fn validate_nesting_rejects_unknown_type_code() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        assert!(validate_ewkb_payload(&blob).is_err());
+    }
+
+    // -- Hardening: validate_nesting nested SRID flag (line 569) --
+
+    #[test]
+    fn validate_nesting_skips_nested_srid() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_GEOMETRYCOLLECTION.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.push(0x01);
+        blob.extend_from_slice(&(WKB_POINT | EWKB_SRID_FLAG).to_le_bytes());
+        blob.extend_from_slice(&4326i32.to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        blob.extend_from_slice(&2.0f64.to_le_bytes());
+        assert!(validate_ewkb_payload(&blob).is_ok());
+    }
+
+    // -- Hardening: walk_for_mbr errors --
+
+    #[test]
+    fn walk_for_mbr_rejects_truncated_nested_header() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        assert!(extract_mbr(&blob).is_err());
+    }
+
+    #[test]
+    fn walk_for_mbr_rejects_invalid_nested_byte_order() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.push(0xFF);
+        blob.extend_from_slice(&WKB_POINT.to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        blob.extend_from_slice(&2.0f64.to_le_bytes());
+        assert!(extract_mbr(&blob).is_err());
+    }
+
+    #[test]
+    fn walk_for_mbr_rejects_unknown_type() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        assert!(extract_mbr(&blob).is_err());
+    }
+
+    // -- Hardening: geometry_type_name for Line, Rect, Triangle --
+
+    #[test]
+    fn geometry_type_name_line() {
+        let line = geo::Line::new(geo::Point::new(0.0, 0.0), geo::Point::new(1.0, 1.0));
+        assert_eq!(geometry_type_name(&geo::Geometry::Line(line)), "Line");
+    }
+
+    #[test]
+    fn geometry_type_name_rect() {
+        let rect = geo::Rect::new(geo::Point::new(0.0, 0.0), geo::Point::new(1.0, 1.0));
+        assert_eq!(geometry_type_name(&geo::Geometry::Rect(rect)), "Rect");
+    }
+
+    #[test]
+    fn geometry_type_name_triangle() {
+        let tri = geo::Triangle::new(
+            geo::Coord { x: 0.0, y: 0.0 },
+            geo::Coord { x: 1.0, y: 0.0 },
+            geo::Coord { x: 0.0, y: 1.0 },
+        );
+        assert_eq!(
+            geometry_type_name(&geo::Geometry::Triangle(tri)),
+            "Triangle"
+        );
+    }
+
+    // -- Hardening: type consistency in Multi* containers --
+
+    #[test]
+    fn validate_nesting_rejects_type_inconsistent_multipoint() {
+        let mut blob = vec![0x01];
+        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.push(0x01);
+        blob.extend_from_slice(&WKB_LINESTRING.to_le_bytes());
+        blob.extend_from_slice(&2u32.to_le_bytes());
+        blob.extend_from_slice(&0.0f64.to_le_bytes());
+        blob.extend_from_slice(&0.0f64.to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        blob.extend_from_slice(&1.0f64.to_le_bytes());
+        let err = validate_ewkb_payload(&blob).unwrap_err();
+        let err_str = format!("{err}");
+        assert!(
+            err_str.contains("wrong type"),
+            "unexpected error: {err_str}"
+        );
     }
 }

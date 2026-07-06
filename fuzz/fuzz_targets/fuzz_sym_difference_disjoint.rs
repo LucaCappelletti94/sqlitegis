@@ -2,8 +2,8 @@
 
 use libfuzzer_sys::fuzz_target;
 
-use sqlitegis::core::ewkb::{parse_ewkb_pair, write_ewkb};
 use sqlitegis::core::error::Result;
+use sqlitegis::core::ewkb::{parse_ewkb_pair, write_ewkb};
 use sqlitegis::core::functions::operations::st_sym_difference;
 
 #[path = "common.rs"]
