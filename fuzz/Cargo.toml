@@ -12,6 +12,8 @@ libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 sqlitegis = { path = "..", default-features = false }
 geo = { version = "0.33", default-features = false }
+# Differential oracle for fuzz_geos_differential. Needs system libgeos-dev.
+geos = "11"
 
 # Prevent this crate from being picked up by the parent workspace.
 [workspace]
@@ -27,6 +29,41 @@ bench = false
 [[bin]]
 name = "fuzz_sym_difference_disjoint"
 path = "fuzz_targets/fuzz_sym_difference_disjoint.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_ewkb_decode"
+path = "fuzz_targets/fuzz_ewkb_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_mbr_differential"
+path = "fuzz_targets/fuzz_mbr_differential.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_text_parsers"
+path = "fuzz_targets/fuzz_text_parsers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_geodesic"
+path = "fuzz_targets/fuzz_geodesic.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_geos_differential"
+path = "fuzz_targets/fuzz_geos_differential.rs"
 test = false
 doc = false
 bench = false
