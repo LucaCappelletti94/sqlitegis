@@ -13,6 +13,7 @@
 //! - `extern "C"` entry points `catch_unwind`, since unwinding across the ABI is UB.
 //! - result lengths are range-checked into `c_int` via `checked_c_int_len`, buffers copied by `SQLITE_TRANSIENT`.
 
+use super::host_api;
 use super::sqlite_compat::sqlite_transient;
 use super::sqlite_compat::*;
 use std::ffi::{CStr, CString};
@@ -24,6 +25,7 @@ use crate::core::function_catalog::{
 use crate::core::functions::accessors::*;
 use crate::core::functions::constructors::*;
 use crate::core::functions::io::*;
+use crate::core::functions::linear_referencing::*;
 use crate::core::functions::measurement::*;
 use crate::core::functions::operations::*;
 use crate::core::functions::predicates::*;
@@ -47,13 +49,13 @@ const DIRECT: c_int = SQLITE_UTF8 | SQLITE_DIRECTONLY_FLAG;
 unsafe fn get_blob<'a>(argv: *mut *mut sqlite3_value, i: usize) -> Option<&'a [u8]> {
     unsafe {
         let v = *argv.add(i);
-        if sqlite3_value_type(v) == SQLITE_NULL {
+        if host_api::value_type(v) == SQLITE_NULL {
             return None;
         }
         // `_blob` before `_bytes` so `len` reflects coercion. from_raw_parts runs
         // only with non-null `ptr` (zero len short-circuits above).
-        let ptr = sqlite3_value_blob(v) as *const u8;
-        let len = sqlite3_value_bytes(v) as usize;
+        let ptr = host_api::value_blob(v) as *const u8;
+        let len = host_api::value_bytes(v) as usize;
         if len == 0 {
             return Some(&[]);
         }
@@ -75,13 +77,13 @@ enum SqlTextArg<'a> {
 unsafe fn get_text<'a>(argv: *mut *mut sqlite3_value, i: usize) -> SqlTextArg<'a> {
     unsafe {
         let v = *argv.add(i);
-        if sqlite3_value_type(v) == SQLITE_NULL {
+        if host_api::value_type(v) == SQLITE_NULL {
             return SqlTextArg::Null;
         }
         // `_text` before `_bytes` for a correct post-coercion `len`, null rejected
         // before from_raw_parts.
-        let ptr = sqlite3_value_text(v);
-        let len = sqlite3_value_bytes(v) as usize;
+        let ptr = host_api::value_text(v);
+        let len = host_api::value_bytes(v) as usize;
         if ptr.is_null() {
             return SqlTextArg::InvalidUtf8;
         }
@@ -108,9 +110,9 @@ enum SqlI32Arg {
 unsafe fn get_f64_arg(argv: *mut *mut sqlite3_value, i: usize) -> SqlArg<f64> {
     unsafe {
         let v = *argv.add(i);
-        match sqlite3_value_type(v) {
+        match host_api::value_type(v) {
             SQLITE_NULL => SqlArg::Null,
-            SQLITE_INTEGER | SQLITE_FLOAT => SqlArg::Value(sqlite3_value_double(v)),
+            SQLITE_INTEGER | SQLITE_FLOAT => SqlArg::Value(host_api::value_double(v)),
             _ => SqlArg::InvalidType,
         }
     }
@@ -119,10 +121,10 @@ unsafe fn get_f64_arg(argv: *mut *mut sqlite3_value, i: usize) -> SqlArg<f64> {
 unsafe fn get_i32_arg(argv: *mut *mut sqlite3_value, i: usize) -> SqlI32Arg {
     unsafe {
         let v = *argv.add(i);
-        match sqlite3_value_type(v) {
+        match host_api::value_type(v) {
             SQLITE_NULL => SqlI32Arg::Null,
             SQLITE_INTEGER => {
-                let raw = sqlite3_value_int64(v);
+                let raw = host_api::value_int64(v);
                 match i32::try_from(raw) {
                     Ok(value) => SqlI32Arg::Value(value),
                     Err(_) => SqlI32Arg::OutOfRange(raw),
@@ -148,7 +150,7 @@ unsafe fn set_blob(ctx: *mut sqlite3_context, data: &[u8]) {
             set_error(ctx, "internal error: BLOB result too large");
             return;
         };
-        sqlite3_result_blob(ctx, data.as_ptr().cast(), len, sqlite_transient());
+        host_api::result_blob(ctx, data.as_ptr().cast(), len, sqlite_transient());
     }
 }
 
@@ -158,41 +160,41 @@ unsafe fn set_text(ctx: *mut sqlite3_context, s: &str) {
             set_error(ctx, "internal error: text result too large");
             return;
         };
-        sqlite3_result_text(ctx, s.as_ptr().cast(), len, sqlite_transient());
+        host_api::result_text(ctx, s.as_ptr().cast(), len, sqlite_transient());
     }
 }
 
 unsafe fn set_f64(ctx: *mut sqlite3_context, v: f64) {
     unsafe {
-        sqlite3_result_double(ctx, v);
+        host_api::result_double(ctx, v);
     }
 }
 unsafe fn set_i64(ctx: *mut sqlite3_context, v: i64) {
     unsafe {
-        sqlite3_result_int64(ctx, v);
+        host_api::result_int64(ctx, v);
     }
 }
 unsafe fn set_i32(ctx: *mut sqlite3_context, v: i32) {
     unsafe {
-        sqlite3_result_int(ctx, v);
+        host_api::result_int(ctx, v);
     }
 }
 unsafe fn set_null(ctx: *mut sqlite3_context) {
     unsafe {
-        sqlite3_result_null(ctx);
+        host_api::result_null(ctx);
     }
 }
 
 unsafe fn set_error(ctx: *mut sqlite3_context, msg: &str) {
     unsafe {
         if let Some(len) = checked_c_int_len(msg.len()) {
-            sqlite3_result_error(ctx, msg.as_ptr().cast(), len);
+            host_api::result_error(ctx, msg.as_ptr().cast(), len);
             return;
         }
 
         let len = c_int::try_from(ERROR_MSG_TOO_LARGE.len())
             .expect("fallback error length must fit in c_int");
-        sqlite3_result_error(ctx, ERROR_MSG_TOO_LARGE.as_ptr().cast(), len);
+        host_api::result_error(ctx, ERROR_MSG_TOO_LARGE.as_ptr().cast(), len);
     }
 }
 
@@ -287,7 +289,7 @@ unsafe fn require_text_arg<'a>(
 unsafe fn any_arg_is_null(argv: *mut *mut sqlite3_value, arg_count: usize) -> bool {
     unsafe {
         for i in 0..arg_count {
-            if sqlite3_value_type(*argv.add(i)) == SQLITE_NULL {
+            if host_api::value_type(*argv.add(i)) == SQLITE_NULL {
                 return true;
             }
         }
@@ -937,6 +939,36 @@ xfunc_blob!(
     st_length_sphere,
     set_f64
 );
+xfunc_blob!(
+    st_lengthspheroid_xfunc,
+    "ST_LengthSpheroid",
+    st_length_spheroid,
+    set_f64
+);
+xfunc_blob!(
+    st_areasphere_xfunc,
+    "ST_AreaSphere",
+    st_area_sphere,
+    set_f64
+);
+xfunc_blob!(
+    st_areaspheroid_xfunc,
+    "ST_AreaSpheroid",
+    st_area_spheroid,
+    set_f64
+);
+xfunc_blob!(
+    st_perimetersphere_xfunc,
+    "ST_PerimeterSphere",
+    st_perimeter_sphere,
+    set_f64
+);
+xfunc_blob!(
+    st_perimeterspheroid_xfunc,
+    "ST_PerimeterSpheroid",
+    st_perimeter_spheroid,
+    set_f64
+);
 xfunc_blob2!(st_azimuth_xfunc, "ST_Azimuth", st_azimuth, set_f64);
 
 xfunc_blob_f64_f64_blob!(
@@ -977,6 +1009,85 @@ xfunc_blob2!(
 );
 
 xfunc_blob_f64_blob!(st_buffer_xfunc, "ST_Buffer", "distance", st_buffer);
+
+xfunc_blob_f64_blob!(
+    st_segmentize_xfunc,
+    "ST_Segmentize",
+    "max_segment_length",
+    st_segmentize
+);
+xfunc_blob_f64_blob!(
+    st_segmentizesphere_xfunc,
+    "ST_SegmentizeSphere",
+    "max_segment_length",
+    st_segmentize_sphere
+);
+xfunc_blob_f64_blob!(
+    st_segmentizespheroid_xfunc,
+    "ST_SegmentizeSpheroid",
+    "max_segment_length",
+    st_segmentize_spheroid
+);
+
+// Linear-referencing callbacks
+
+xfunc_blob_f64_blob!(
+    st_lineinterpolatepoint_xfunc,
+    "ST_LineInterpolatePoint",
+    "fraction",
+    st_line_interpolate_point
+);
+xfunc_blob_f64_blob!(
+    st_lineinterpolatepointsphere_xfunc,
+    "ST_LineInterpolatePointSphere",
+    "fraction",
+    st_line_interpolate_point_sphere
+);
+xfunc_blob_f64_blob!(
+    st_lineinterpolatepointspheroid_xfunc,
+    "ST_LineInterpolatePointSpheroid",
+    "fraction",
+    st_line_interpolate_point_spheroid
+);
+xfunc_blob_f64_blob!(
+    st_lineinterpolatepoints_xfunc,
+    "ST_LineInterpolatePoints",
+    "fraction",
+    st_line_interpolate_points
+);
+xfunc_blob_f64_blob!(
+    st_lineinterpolatepointssphere_xfunc,
+    "ST_LineInterpolatePointsSphere",
+    "fraction",
+    st_line_interpolate_points_sphere
+);
+xfunc_blob_f64_blob!(
+    st_lineinterpolatepointsspheroid_xfunc,
+    "ST_LineInterpolatePointsSpheroid",
+    "fraction",
+    st_line_interpolate_points_spheroid
+);
+xfunc_blob_f64_f64_blob!(
+    st_linesubstring_xfunc,
+    "ST_LineSubstring",
+    "start fraction",
+    "end fraction",
+    st_line_substring
+);
+xfunc_blob_f64_f64_blob!(
+    st_linesubstringsphere_xfunc,
+    "ST_LineSubstringSphere",
+    "start fraction",
+    "end fraction",
+    st_line_substring_sphere
+);
+xfunc_blob_f64_f64_blob!(
+    st_linesubstringspheroid_xfunc,
+    "ST_LineSubstringSpheroid",
+    "start fraction",
+    "end fraction",
+    st_line_substring_spheroid
+);
 
 // Predicate callbacks
 
@@ -1057,7 +1168,7 @@ unsafe fn exec_sql_inner(db: *mut sqlite3, sql: &str, ctx: Option<*mut sqlite3_c
         };
 
         let mut err_msg: *mut std::ffi::c_char = std::ptr::null_mut();
-        let rc = sqlite3_exec(db, c_sql.as_ptr(), None, std::ptr::null_mut(), &mut err_msg);
+        let rc = host_api::exec(db, c_sql.as_ptr(), None, std::ptr::null_mut(), &mut err_msg);
 
         if rc != SQLITE_OK {
             if let Some(ctx) = ctx {
@@ -1071,7 +1182,7 @@ unsafe fn exec_sql_inner(db: *mut sqlite3, sql: &str, ctx: Option<*mut sqlite3_c
         }
 
         if !err_msg.is_null() {
-            sqlite3_free(err_msg.cast());
+            host_api::free(err_msg.cast());
         }
         rc
     }
@@ -1106,31 +1217,31 @@ unsafe fn sqlite_master_lookup_text(
         let c_sql = sql_to_cstring(sql)
             .map_err(|_| "internal error: generated SQL contains NUL byte".to_string())?;
         let mut stmt: *mut sqlite3_stmt = std::ptr::null_mut();
-        let rc = sqlite3_prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut());
+        let rc = host_api::prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut());
         if rc != SQLITE_OK {
-            return Err(CStr::from_ptr(sqlite3_errmsg(db))
+            return Err(CStr::from_ptr(host_api::errmsg(db))
                 .to_string_lossy()
                 .into_owned());
         }
 
         let mut result = None;
-        let step = sqlite3_step(stmt);
+        let step = host_api::step(stmt);
         if step == SQLITE_ROW {
-            if sqlite3_column_type(stmt, 0) != SQLITE_NULL {
-                let ptr = sqlite3_column_text(stmt, 0);
+            if host_api::column_type(stmt, 0) != SQLITE_NULL {
+                let ptr = host_api::column_text(stmt, 0);
                 if !ptr.is_null() {
                     result = Some(CStr::from_ptr(ptr.cast()).to_string_lossy().into_owned());
                 }
             }
         } else if step != SQLITE_DONE {
-            let err = CStr::from_ptr(sqlite3_errmsg(db))
+            let err = CStr::from_ptr(host_api::errmsg(db))
                 .to_string_lossy()
                 .into_owned();
-            let _ = sqlite3_finalize(stmt);
+            let _ = host_api::finalize(stmt);
             return Err(err);
         }
 
-        let _ = sqlite3_finalize(stmt);
+        let _ = host_api::finalize(stmt);
         Ok(result)
     }
 }
@@ -1162,9 +1273,9 @@ unsafe fn inspect_spatial_index_catalog_columns(
         let c_sql = sql_to_cstring(&sql)
             .map_err(|_| "internal error: generated SQL contains NUL byte".to_string())?;
         let mut stmt: *mut sqlite3_stmt = std::ptr::null_mut();
-        let rc = sqlite3_prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut());
+        let rc = host_api::prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut());
         if rc != SQLITE_OK {
-            return Err(CStr::from_ptr(sqlite3_errmsg(db))
+            return Err(CStr::from_ptr(host_api::errmsg(db))
                 .to_string_lossy()
                 .into_owned());
         }
@@ -1174,10 +1285,10 @@ unsafe fn inspect_spatial_index_catalog_columns(
         let mut has_column_name = false;
 
         loop {
-            let step = sqlite3_step(stmt);
+            let step = host_api::step(stmt);
             if step == SQLITE_ROW {
-                if sqlite3_column_type(stmt, 1) != SQLITE_NULL {
-                    let ptr = sqlite3_column_text(stmt, 1);
+                if host_api::column_type(stmt, 1) != SQLITE_NULL {
+                    let ptr = host_api::column_text(stmt, 1);
                     if !ptr.is_null() {
                         let column_name = CStr::from_ptr(ptr.cast()).to_string_lossy();
                         match column_name.as_ref() {
@@ -1193,14 +1304,14 @@ unsafe fn inspect_spatial_index_catalog_columns(
             if step == SQLITE_DONE {
                 break;
             }
-            let err = CStr::from_ptr(sqlite3_errmsg(db))
+            let err = CStr::from_ptr(host_api::errmsg(db))
                 .to_string_lossy()
                 .into_owned();
-            let _ = sqlite3_finalize(stmt);
+            let _ = host_api::finalize(stmt);
             return Err(err);
         }
 
-        let _ = sqlite3_finalize(stmt);
+        let _ = host_api::finalize(stmt);
         Ok((has_prefix, has_table_name, has_column_name))
     }
 }
@@ -1313,7 +1424,7 @@ unsafe fn ensure_spatial_index_catalog_table(
             return true;
         }
 
-        let err = CStr::from_ptr(sqlite3_errmsg(db))
+        let err = CStr::from_ptr(host_api::errmsg(db))
             .to_string_lossy()
             .into_owned();
         set_error(
@@ -1598,7 +1709,7 @@ unsafe extern "C" fn create_spatial_index_xfunc(
                 return;
             };
 
-            let db = sqlite3_context_db_handle(ctx);
+            let db = host_api::context_db_handle(ctx);
             let prefix = format!("{table}_{column}");
             let rtree = format!("{prefix}_rtree");
             let savepoint = "sqlitegis_create_spatial_index";
@@ -1763,7 +1874,7 @@ unsafe extern "C" fn drop_spatial_index_xfunc(
                 return;
             };
 
-            let db = sqlite3_context_db_handle(ctx);
+            let db = host_api::context_db_handle(ctx);
             let prefix = format!("{table}_{column}");
             let savepoint = "sqlitegis_drop_spatial_index";
 
@@ -1899,7 +2010,7 @@ unsafe fn reg(db: *mut sqlite3, name: &str, n_arg: c_int, flags: c_int, xfunc: X
             Ok(v) => v,
             Err(_) => return SQLITE_ERROR,
         };
-        sqlite3_create_function_v2(
+        host_api::create_function_v2(
             db,
             c_name.as_ptr(),
             n_arg,
@@ -2030,6 +2141,9 @@ pub unsafe fn register_functions(db: *mut sqlite3) -> c_int {
 pub fn register_on_every_new_connection() -> c_int {
     use std::sync::Once;
     static INIT: Once = Once::new();
+    // Direct call, not routed through `host_api`: this registers against the
+    // SQLite this library is linked to, for Rust callers who share it. A
+    // loadable extension never reaches here.
     INIT.call_once(|| unsafe {
         sqlite3_auto_extension(Some(sqlitegis_auto_extension_init));
     });
@@ -2058,9 +2172,12 @@ unsafe extern "C" fn sqlitegis_auto_extension_init(
 pub unsafe extern "C" fn sqlite3_sqlitegis_init(
     db: *mut sqlite3,
     _pz_err_msg: *mut *mut std::ffi::c_char,
-    _p_api: *mut sqlite3_api_routines,
+    p_api: *mut sqlite3_api_routines,
 ) -> c_int {
     unsafe {
+        // Adopt the loader's own SQLite before touching `db`, which belongs
+        // to it and not to whatever `libsqlite3` this library links.
+        host_api::install(p_api);
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| register_functions(db))) {
             Ok(rc) => rc,
             Err(_) => SQLITE_ERROR,

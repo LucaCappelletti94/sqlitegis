@@ -391,5 +391,29 @@ assert_geom_geom_text_cases!(method_st_relate_match_geoms => st_relate_match_geo
 
 // Geography variants
 
-assert_unary_cases!(method_st_lengthsphere => st_lengthsphere,);
+assert_unary_cases!(
+    method_st_lengthsphere => st_lengthsphere,
+    method_st_lengthspheroid => st_lengthspheroid,
+    method_st_areasphere => st_areasphere,
+    method_st_areaspheroid => st_areaspheroid,
+    method_st_perimetersphere => st_perimetersphere,
+    method_st_perimeterspheroid => st_perimeterspheroid,
+);
+assert_unary_cases!(method_st_length2dspheroid => st_length2dspheroid,);
+assert_geom_double_cases!(
+    method_st_segmentize => st_segmentize,
+    method_st_segmentizesphere => st_segmentizesphere,
+    method_st_segmentizespheroid => st_segmentizespheroid,
+    method_st_lineinterpolatepoint => st_lineinterpolatepoint,
+    method_st_lineinterpolatepointsphere => st_lineinterpolatepointsphere,
+    method_st_lineinterpolatepointspheroid => st_lineinterpolatepointspheroid,
+    method_st_lineinterpolatepoints => st_lineinterpolatepoints,
+    method_st_lineinterpolatepointssphere => st_lineinterpolatepointssphere,
+    method_st_lineinterpolatepointsspheroid => st_lineinterpolatepointsspheroid,
+);
+assert_geom_double_double_cases!(
+    method_st_linesubstring => st_linesubstring,
+    method_st_linesubstringsphere => st_linesubstringsphere,
+    method_st_linesubstringspheroid => st_linesubstringspheroid,
+);
 assert_geom_double_double_cases!(method_st_project => st_project,);

@@ -11,6 +11,9 @@
 //! - [`crate::core::functions::measurement`] -- numeric measurements
 //!   (`st_distance`, `st_area`, `st_length`, `st_distance_sphere`,
 //!   `st_distance_spheroid`, ...).
+//! - [`crate::core::functions::linear_referencing`] -- pick a point or a
+//!   slice out of a line by fraction (`st_line_interpolate_point`,
+//!   `st_line_substring`, ...).
 //! - [`crate::core::functions::operations`] -- derive new geometries from
 //!   existing ones (`st_buffer`, `st_union`, `st_intersection`,
 //!   `st_difference`, ...).
@@ -29,6 +32,7 @@ pub mod accessors;
 pub mod constructors;
 pub(crate) mod emptiness;
 pub mod io;
+pub mod linear_referencing;
 pub mod measurement;
 pub mod operations;
 pub mod predicates;

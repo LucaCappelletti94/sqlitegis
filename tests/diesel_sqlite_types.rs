@@ -873,6 +873,120 @@ fn debug_query_st_lengthsphere() {
 }
 
 #[test]
+fn debug_query_st_lengthspheroid() {
+    use sqlitegis::diesel::functions::*;
+    assert_sql_contains!(
+        diesel::dsl::select(st_lengthspheroid(g!())),
+        "st_lengthspheroid"
+    );
+}
+
+#[test]
+fn debug_query_st_areasphere() {
+    use sqlitegis::diesel::functions::*;
+    assert_sql_contains!(diesel::dsl::select(st_areasphere(g!())), "st_areasphere");
+}
+
+#[test]
+fn debug_query_st_areaspheroid() {
+    use sqlitegis::diesel::functions::*;
+    assert_sql_contains!(
+        diesel::dsl::select(st_areaspheroid(g!())),
+        "st_areaspheroid"
+    );
+}
+
+#[test]
+fn debug_query_st_perimetersphere() {
+    use sqlitegis::diesel::functions::*;
+    assert_sql_contains!(
+        diesel::dsl::select(st_perimetersphere(g!())),
+        "st_perimetersphere"
+    );
+}
+
+#[test]
+fn debug_query_st_perimeterspheroid() {
+    use sqlitegis::diesel::functions::*;
+    assert_sql_contains!(
+        diesel::dsl::select(st_perimeterspheroid(g!())),
+        "st_perimeterspheroid"
+    );
+}
+
+#[test]
+fn debug_query_st_length2dspheroid() {
+    use sqlitegis::diesel::functions::*;
+    assert_sql_contains!(
+        diesel::dsl::select(st_length2dspheroid(g!())),
+        "st_length2dspheroid"
+    );
+}
+
+#[test]
+fn debug_query_segmentize_family() {
+    use sqlitegis::diesel::functions::*;
+    assert_sql_contains!(
+        diesel::dsl::select(st_segmentize(g!(), d!())),
+        "st_segmentize"
+    );
+    assert_sql_contains!(
+        diesel::dsl::select(st_segmentizesphere(g!(), d!())),
+        "st_segmentizesphere"
+    );
+    assert_sql_contains!(
+        diesel::dsl::select(st_segmentizespheroid(g!(), d!())),
+        "st_segmentizespheroid"
+    );
+}
+
+#[test]
+fn debug_query_line_interpolate_family() {
+    use sqlitegis::diesel::functions::*;
+    assert_sql_contains!(
+        diesel::dsl::select(st_lineinterpolatepoint(g!(), d!())),
+        "st_lineinterpolatepoint"
+    );
+    assert_sql_contains!(
+        diesel::dsl::select(st_lineinterpolatepointsphere(g!(), d!())),
+        "st_lineinterpolatepointsphere"
+    );
+    assert_sql_contains!(
+        diesel::dsl::select(st_lineinterpolatepointspheroid(g!(), d!())),
+        "st_lineinterpolatepointspheroid"
+    );
+    assert_sql_contains!(
+        diesel::dsl::select(st_lineinterpolatepoints(g!(), d!())),
+        "st_lineinterpolatepoints"
+    );
+    assert_sql_contains!(
+        diesel::dsl::select(st_lineinterpolatepointssphere(g!(), d!())),
+        "st_lineinterpolatepointssphere"
+    );
+    assert_sql_contains!(
+        diesel::dsl::select(st_lineinterpolatepointsspheroid(g!(), d!())),
+        "st_lineinterpolatepointsspheroid"
+    );
+}
+
+#[test]
+fn debug_query_line_substring_family() {
+    use sqlitegis::diesel::functions::*;
+    assert_sql_contains!(
+        diesel::dsl::select(st_linesubstring(g!(), d!(), d!())),
+        "st_linesubstring"
+    );
+    assert_sql_contains!(
+        diesel::dsl::select(st_linesubstringsphere(g!(), d!(), d!())),
+        "st_linesubstringsphere"
+    );
+    assert_sql_contains!(
+        diesel::dsl::select(st_linesubstringspheroid(g!(), d!(), d!())),
+        "st_linesubstringspheroid"
+    );
+}
+
+#[test]
 fn debug_query_st_azimuth() {
     use sqlitegis::diesel::functions::*;
     assert_sql_contains!(diesel::dsl::select(st_azimuth(g!(), g!())), "st_azimuth");

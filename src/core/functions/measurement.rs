@@ -2,15 +2,19 @@
 //!
 //! ST_Area, ST_Perimeter, ST_Length, ST_Length2D, ST_Distance,
 //! ST_Centroid, ST_PointOnSurface, ST_XMin/XMax/YMin/YMax,
-//! ST_DistanceSphere, ST_DistanceSpheroid, ST_Azimuth, ST_Project,
-//! ST_ClosestPoint, ST_HausdorffDistance
+//! ST_DistanceSphere, ST_DistanceSpheroid, ST_LengthSphere, ST_LengthSpheroid,
+//! ST_AreaSphere, ST_AreaSpheroid, ST_PerimeterSphere, ST_PerimeterSpheroid,
+//! ST_Azimuth, ST_Project, ST_ClosestPoint, ST_HausdorffDistance
 
 use geo::algorithm::line_measures::metric_spaces::{Euclidean, Geodesic, Haversine};
 use geo::algorithm::line_measures::{Bearing, Destination, Distance, Length};
 use geo::algorithm::InteriorPoint;
-use geo::algorithm::{Area, BoundingRect, Centroid, ClosestPoint, HausdorffDistance};
+use geo::algorithm::{Area, BoundingRect, Centroid, ClosestPoint, GeodesicArea, HausdorffDistance};
 use geo::Closest;
-use geo::{Geometry, Point, Rect};
+use geo::{Geometry, LineString, Polygon};
+use geo::{Point, Rect};
+use geographiclib_rs::{Geodesic as GeodesicModel, PolygonArea, Winding};
+use std::sync::LazyLock;
 
 use crate::core::error::{Result, SqliteGisError};
 use crate::core::ewkb::{ensure_matching_srid, parse_ewkb, parse_ewkb_pair, write_ewkb};
@@ -55,7 +59,10 @@ fn require_geographic_latitude(point: Point<f64>, fn_name: &str) -> Result<Point
 
 /// Reject a line whose any vertex latitude falls outside `[-90, 90]`, so
 /// `Haversine` length is not computed over invalid geographic coordinates.
-fn require_geographic_line_latitudes(ls: &geo::LineString<f64>, fn_name: &str) -> Result<()> {
+pub(crate) fn require_geographic_line_latitudes(
+    ls: &geo::LineString<f64>,
+    fn_name: &str,
+) -> Result<()> {
     for coord in ls.coords() {
         if !latitude_in_range(coord.y) {
             return Err(SqliteGisError::InvalidInput(format!(
@@ -325,7 +332,7 @@ fn require_point(g: Geometry<f64>) -> Result<Point<f64>> {
     }
 }
 
-fn ensure_geographic_srid(srid: Option<i32>, fn_name: &str) -> Result<()> {
+pub(crate) fn ensure_geographic_srid(srid: Option<i32>, fn_name: &str) -> Result<()> {
     match srid {
         Some(4326) => Ok(()),
         Some(srid) => Err(SqliteGisError::InvalidInput(format!(
@@ -402,6 +409,110 @@ pub fn st_distance_spheroid(a: &[u8], b: &[u8]) -> Result<f64> {
     Ok(Geodesic.distance(pa, pb))
 }
 
+/// A perfectly round earth of the radius `Haversine` uses, so `ST_AreaSphere`
+/// reports area on the same planet `ST_LengthSphere` and `ST_DistanceSphere`
+/// measure lengths on. `geo`'s own spherical area helper is fixed to the
+/// equatorial radius, which would put the two 0.22% apart.
+static SPHERE: LazyLock<GeodesicModel> =
+    LazyLock::new(|| GeodesicModel::new(Haversine.radius(), 0.0));
+
+/// Reject a polygon with any vertex latitude outside `[-90, 90]`, where the
+/// Karney area returns `NaN` and Haversine a wrong finite value.
+fn require_geographic_polygon_latitudes(poly: &Polygon<f64>, fn_name: &str) -> Result<()> {
+    require_geographic_line_latitudes(poly.exterior(), fn_name)?;
+    for ring in poly.interiors() {
+        require_geographic_line_latitudes(ring, fn_name)?;
+    }
+    Ok(())
+}
+
+/// Apply a curved-earth line measure to a lineal geometry, summing over the
+/// parts of a MultiLineString.
+fn measure_geographic_lines(
+    blob: &[u8],
+    fn_name: &str,
+    measure: impl Fn(&LineString<f64>) -> f64,
+) -> Result<f64> {
+    let (geom, srid) = parse_ewkb(blob)?;
+    ensure_geographic_srid(srid, fn_name)?;
+    match &geom {
+        Geometry::LineString(ls) => {
+            require_geographic_line_latitudes(ls, fn_name)?;
+            Ok(measure(ls))
+        }
+        Geometry::MultiLineString(mls) => {
+            for ls in &mls.0 {
+                require_geographic_line_latitudes(ls, fn_name)?;
+            }
+            Ok(mls.0.iter().map(measure).sum())
+        }
+        other => Err(SqliteGisError::wrong_type(
+            "LineString or MultiLineString",
+            other,
+        )),
+    }
+}
+
+/// Apply a curved-earth areal measure to an areal geometry, summing over the
+/// parts of a MultiPolygon.
+fn measure_geographic_polygons(
+    blob: &[u8],
+    fn_name: &str,
+    measure: impl Fn(&Polygon<f64>) -> f64,
+) -> Result<f64> {
+    let (geom, srid) = parse_ewkb(blob)?;
+    ensure_geographic_srid(srid, fn_name)?;
+    match &geom {
+        Geometry::Polygon(p) => {
+            require_geographic_polygon_latitudes(p, fn_name)?;
+            Ok(measure(p))
+        }
+        Geometry::MultiPolygon(mp) => {
+            for p in &mp.0 {
+                require_geographic_polygon_latitudes(p, fn_name)?;
+            }
+            Ok(mp.0.iter().map(measure).sum())
+        }
+        other => Err(SqliteGisError::wrong_type("Polygon or MultiPolygon", other)),
+    }
+}
+
+/// Signed area of one ring on [`SPHERE`], mirroring the ring walk `geo` uses
+/// for the ellipsoid.
+fn sphere_ring_area(ring: &LineString<f64>, winding: Winding) -> f64 {
+    let mut area = PolygonArea::new(&SPHERE, winding);
+    for p in ring.points() {
+        area.add_point(p.y(), p.x());
+    }
+    area.compute(true).1
+}
+
+/// Area of a polygon on [`SPHERE`], holes subtracted.
+///
+/// The magnitude is taken so either ring winding reports a positive area, the
+/// way PostGIS does. That costs the ability to tell a clockwise ring from a
+/// polygon covering more than half the planet, a limitation PostGIS and `geo`
+/// share.
+fn sphere_polygon_area(poly: &Polygon<f64>) -> f64 {
+    let shell = sphere_ring_area(poly.exterior(), Winding::CounterClockwise).abs();
+    let holes: f64 = poly
+        .interiors()
+        .iter()
+        .map(|ring| sphere_ring_area(ring, Winding::Clockwise).abs())
+        .sum();
+    shell - holes
+}
+
+/// Haversine perimeter of a polygon, interior rings included.
+fn sphere_polygon_perimeter(poly: &Polygon<f64>) -> f64 {
+    Haversine.length(poly.exterior())
+        + poly
+            .interiors()
+            .iter()
+            .map(|ring| Haversine.length(ring))
+            .sum::<f64>()
+}
+
 /// ST_LengthSphere: Haversine arc length of a line in metres (SRID 4326).
 ///
 /// # Example
@@ -415,24 +526,97 @@ pub fn st_distance_spheroid(a: &[u8], b: &[u8]) -> Result<f64> {
 /// assert!(len > 300_000.0); // > 300 km
 /// ```
 pub fn st_length_sphere(blob: &[u8]) -> Result<f64> {
-    let (geom, srid) = parse_ewkb(blob)?;
-    ensure_geographic_srid(srid, "ST_LengthSphere")?;
-    match &geom {
-        Geometry::LineString(ls) => {
-            require_geographic_line_latitudes(ls, "ST_LengthSphere")?;
-            Ok(Haversine.length(ls))
-        }
-        Geometry::MultiLineString(mls) => {
-            for ls in &mls.0 {
-                require_geographic_line_latitudes(ls, "ST_LengthSphere")?;
-            }
-            Ok(mls.0.iter().map(|ls| Haversine.length(ls)).sum())
-        }
-        other => Err(SqliteGisError::wrong_type(
-            "LineString or MultiLineString",
-            other,
-        )),
-    }
+    measure_geographic_lines(blob, "ST_LengthSphere", |ls| Haversine.length(ls))
+}
+
+/// ST_LengthSpheroid: geodesic arc length of a line in metres on the WGS84
+/// ellipsoid (Karney algorithm, SRID 4326).
+///
+/// # Example
+///
+/// ```
+/// use sqlitegis::core::functions::measurement::{st_length_sphere, st_length_spheroid};
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let line = geom_from_text("LINESTRING(0 0, 1 1)", Some(4326)).unwrap();
+/// // PostGIS answers 156899.56829134029 for this line read as `geography`.
+/// assert!((st_length_spheroid(&line).unwrap() - 156_899.568_291_340_29).abs() < 1e-6);
+/// // The sphere is 0.22% high on the same line.
+/// assert!(st_length_sphere(&line).unwrap() > st_length_spheroid(&line).unwrap());
+/// ```
+pub fn st_length_spheroid(blob: &[u8]) -> Result<f64> {
+    measure_geographic_lines(blob, "ST_LengthSpheroid", |ls| Geodesic.length(ls))
+}
+
+/// ST_AreaSpheroid: area in square metres on the WGS84 ellipsoid (Karney
+/// algorithm, SRID 4326).
+///
+/// # Example
+///
+/// ```
+/// use sqlitegis::core::functions::measurement::st_area_spheroid;
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let poly = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", Some(4326)).unwrap();
+/// // PostGIS answers 12308778361.469454 for this polygon read as `geography`.
+/// assert!((st_area_spheroid(&poly).unwrap() - 12_308_778_361.469_454).abs() < 1e-3);
+/// ```
+pub fn st_area_spheroid(blob: &[u8]) -> Result<f64> {
+    measure_geographic_polygons(blob, "ST_AreaSpheroid", |p| p.geodesic_area_signed().abs())
+}
+
+/// ST_PerimeterSpheroid: perimeter in metres on the WGS84 ellipsoid, interior
+/// rings included (Karney algorithm, SRID 4326).
+///
+/// # Example
+///
+/// ```
+/// use sqlitegis::core::functions::measurement::st_perimeter_spheroid;
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let poly = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", Some(4326)).unwrap();
+/// // PostGIS answers 443770.917248302 for this polygon read as `geography`.
+/// assert!((st_perimeter_spheroid(&poly).unwrap() - 443_770.917_248_302).abs() < 1e-6);
+/// ```
+pub fn st_perimeter_spheroid(blob: &[u8]) -> Result<f64> {
+    measure_geographic_polygons(blob, "ST_PerimeterSpheroid", |p| p.geodesic_perimeter())
+}
+
+/// ST_AreaSphere: area in square metres on a sphere of the mean earth radius
+/// (SRID 4326).
+///
+/// # Example
+///
+/// ```
+/// use sqlitegis::core::functions::measurement::{st_area_sphere, st_area_spheroid};
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let poly = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", Some(4326)).unwrap();
+/// // A sphere overstates this equatorial cell by 0.45% against the ellipsoid.
+/// assert!(st_area_sphere(&poly).unwrap() > st_area_spheroid(&poly).unwrap());
+/// ```
+pub fn st_area_sphere(blob: &[u8]) -> Result<f64> {
+    measure_geographic_polygons(blob, "ST_AreaSphere", sphere_polygon_area)
+}
+
+/// ST_PerimeterSphere: Haversine perimeter in metres, interior rings included
+/// (SRID 4326).
+///
+/// # Example
+///
+/// ```
+/// use sqlitegis::core::functions::measurement::{st_length_sphere, st_perimeter_sphere};
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let poly = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", Some(4326)).unwrap();
+/// let ring = geom_from_text("LINESTRING(0 0,1 0,1 1,0 1,0 0)", Some(4326)).unwrap();
+/// assert_eq!(
+///     st_perimeter_sphere(&poly).unwrap(),
+///     st_length_sphere(&ring).unwrap()
+/// );
+/// ```
+pub fn st_perimeter_sphere(blob: &[u8]) -> Result<f64> {
+    measure_geographic_polygons(blob, "ST_PerimeterSphere", sphere_polygon_perimeter)
 }
 
 /// ST_Azimuth: bearing from origin to target in radians (0 = north, clockwise, SRID 4326).
@@ -965,5 +1149,241 @@ mod tests {
             format!("{err}").contains("non-finite"),
             "expected non-finite error, got: {err}"
         );
+    }
+
+    // -- Curved-earth length, area and perimeter ---------------------
+
+    /// Assert against a reference constant read out of PostGIS 3.5 (or, for
+    /// the sphere, out of geographiclib on a mean-radius sphere). Karney
+    /// lands within a few ULP of those, so the window stays tight enough
+    /// that a swapped earth model or algorithm fails the test.
+    fn assert_matches_reference(got: f64, want: f64) {
+        let rel = (got - want).abs() / want.abs();
+        assert!(rel < 1e-12, "got {got}, want {want}, relative error {rel}");
+    }
+
+    fn unit_square_4326() -> Vec<u8> {
+        geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", Some(4326)).unwrap()
+    }
+
+    #[test]
+    fn st_length_spheroid_matches_postgis() {
+        let line = geom_from_text("LINESTRING(0 0, 1 1)", Some(4326)).unwrap();
+        assert_matches_reference(st_length_spheroid(&line).unwrap(), 156_899.568_291_340_29);
+    }
+
+    #[test]
+    fn st_area_spheroid_matches_postgis() {
+        assert_matches_reference(
+            st_area_spheroid(&unit_square_4326()).unwrap(),
+            12_308_778_361.469_454,
+        );
+    }
+
+    #[test]
+    fn st_perimeter_spheroid_matches_postgis() {
+        assert_matches_reference(
+            st_perimeter_spheroid(&unit_square_4326()).unwrap(),
+            443_770.917_248_302,
+        );
+    }
+
+    #[test]
+    fn st_area_sphere_matches_exact_spherical_area() {
+        assert_matches_reference(
+            st_area_sphere(&unit_square_4326()).unwrap(),
+            12_364_031_909.465_616,
+        );
+    }
+
+    #[test]
+    fn st_perimeter_sphere_matches_haversine_rings() {
+        assert_matches_reference(
+            st_perimeter_sphere(&unit_square_4326()).unwrap(),
+            444_763.384_955_006_4,
+        );
+    }
+
+    #[test]
+    fn spheroid_length_beats_sphere_length_against_postgis() {
+        // The whole point of the ellipsoid variant: the sphere is 0.22% high
+        // on this line, so the two must not collapse onto the same number.
+        let line = geom_from_text("LINESTRING(0 0, 1 1)", Some(4326)).unwrap();
+        let sphere = st_length_sphere(&line).unwrap();
+        let spheroid = st_length_spheroid(&line).unwrap();
+        assert!(sphere > spheroid, "sphere {sphere} spheroid {spheroid}");
+        assert!((sphere / spheroid - 1.0) > 1e-3);
+    }
+
+    #[test]
+    fn st_length_spheroid_sums_multilinestring() {
+        let multi = geom_from_text("MULTILINESTRING((0 0, 1 1),(1 1, 2 2))", Some(4326)).unwrap();
+        assert_matches_reference(st_length_spheroid(&multi).unwrap(), 313_775.717_693_227);
+    }
+
+    #[test]
+    fn spheroid_area_subtracts_holes_and_perimeter_adds_them() {
+        let holed = geom_from_text(
+            "POLYGON((0 0,1 0,1 1,0 1,0 0),(0.25 0.25,0.75 0.25,0.75 0.75,0.25 0.75,0.25 0.25))",
+            Some(4326),
+        )
+        .unwrap();
+        assert_matches_reference(st_area_spheroid(&holed).unwrap(), 9_231_614_224.814_873);
+        assert_matches_reference(
+            st_perimeter_spheroid(&holed).unwrap(),
+            665_659.512_548_929_4,
+        );
+    }
+
+    #[test]
+    fn sphere_area_subtracts_holes() {
+        let holed = geom_from_text(
+            "POLYGON((0 0,1 0,1 1,0 1,0 0),(0.25 0.25,0.75 0.25,0.75 0.75,0.25 0.75,0.25 0.25))",
+            Some(4326),
+        )
+        .unwrap();
+        let solid = st_area_sphere(&unit_square_4326()).unwrap();
+        let hole_only = geom_from_text(
+            "POLYGON((0.25 0.25,0.75 0.25,0.75 0.75,0.25 0.75,0.25 0.25))",
+            Some(4326),
+        )
+        .unwrap();
+        assert_matches_reference(
+            st_area_sphere(&holed).unwrap(),
+            solid - st_area_sphere(&hole_only).unwrap(),
+        );
+    }
+
+    #[test]
+    fn spheroid_measures_sum_over_multipolygon() {
+        let multi = geom_from_text(
+            "MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((2 2,3 2,3 3,2 3,2 2)))",
+            Some(4326),
+        )
+        .unwrap();
+        assert_matches_reference(st_area_spheroid(&multi).unwrap(), 24_606_608_733.575_493);
+        assert_matches_reference(
+            st_perimeter_spheroid(&multi).unwrap(),
+            887_343.826_738_655_1,
+        );
+    }
+
+    #[test]
+    fn sphere_measures_sum_over_multipolygon() {
+        // PostGIS's spherical area is 0.67% off the true spherical value, so
+        // there is no constant to read. The contract that matters is that the
+        // parts are summed, not that one of them is dropped.
+        let parts = [
+            "POLYGON((0 0,1 0,1 1,0 1,0 0))",
+            "POLYGON((2 2,3 2,3 3,2 3,2 2))",
+        ];
+        let multi = geom_from_text(
+            "MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((2 2,3 2,3 3,2 3,2 2)))",
+            Some(4326),
+        )
+        .unwrap();
+        let mut area = 0.0;
+        let mut perimeter = 0.0;
+        for part in parts {
+            let blob = geom_from_text(part, Some(4326)).unwrap();
+            area += st_area_sphere(&blob).unwrap();
+            perimeter += st_perimeter_sphere(&blob).unwrap();
+        }
+        assert_matches_reference(st_area_sphere(&multi).unwrap(), area);
+        assert_matches_reference(st_perimeter_sphere(&multi).unwrap(), perimeter);
+        // Both parts really are distinct, so the sum is not one part twice.
+        assert!(area > st_area_sphere(&geom_from_text(parts[0], Some(4326)).unwrap()).unwrap());
+    }
+
+    #[test]
+    fn areas_are_positive_regardless_of_ring_winding() {
+        // PostGIS answers the same positive area for either winding. geo's
+        // signed area flips sign, so the implementation has to take the
+        // magnitude rather than trusting the ring order.
+        let ccw = unit_square_4326();
+        let cw = geom_from_text("POLYGON((0 0,0 1,1 1,1 0,0 0))", Some(4326)).unwrap();
+        assert_matches_reference(
+            st_area_spheroid(&cw).unwrap(),
+            st_area_spheroid(&ccw).unwrap(),
+        );
+        assert_matches_reference(st_area_sphere(&cw).unwrap(), st_area_sphere(&ccw).unwrap());
+    }
+
+    #[test]
+    fn curved_measures_require_srid_4326() {
+        let line = geom_from_text("LINESTRING(0 0, 1 1)", None).unwrap();
+        let poly = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        for err in [
+            st_length_spheroid(&line).expect_err("SRID-less line must error"),
+            st_area_spheroid(&poly).expect_err("SRID-less polygon must error"),
+            st_perimeter_spheroid(&poly).expect_err("SRID-less polygon must error"),
+            st_area_sphere(&poly).expect_err("SRID-less polygon must error"),
+            st_perimeter_sphere(&poly).expect_err("SRID-less polygon must error"),
+        ] {
+            assert!(
+                format!("{err}").contains("requires SRID 4326"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn curved_measures_reject_shapes_they_cannot_measure() {
+        let line = geom_from_text("LINESTRING(0 0,1 1)", Some(4326)).unwrap();
+        let poly = unit_square_4326();
+        let point = st_point(0.0, 0.0, Some(4326)).unwrap();
+
+        for err in [
+            st_length_spheroid(&poly).expect_err("polygon has no geodesic length"),
+            st_length_spheroid(&point).expect_err("point has no geodesic length"),
+        ] {
+            assert!(
+                format!("{err}").contains("LineString or MultiLineString"),
+                "unexpected error: {err}"
+            );
+        }
+
+        for err in [
+            st_area_spheroid(&line).expect_err("line has no geodesic area"),
+            st_perimeter_spheroid(&line).expect_err("line has no geodesic perimeter"),
+            st_area_sphere(&point).expect_err("point has no spherical area"),
+            st_perimeter_sphere(&point).expect_err("point has no spherical perimeter"),
+        ] {
+            assert!(
+                format!("{err}").contains("Polygon or MultiPolygon"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn curved_measures_reject_out_of_range_latitude() {
+        // Karney returns NaN past the pole and Haversine a wrong finite
+        // number, so both models have to refuse the vertex outright.
+        let line = geom_from_text("LINESTRING(0 0, 10 95)", Some(4326)).unwrap();
+        let poly = geom_from_text("POLYGON((0 0,1 0,1 95,0 95,0 0))", Some(4326)).unwrap();
+        for err in [
+            st_length_spheroid(&line).expect_err("out-of-range latitude must error"),
+            st_area_spheroid(&poly).expect_err("out-of-range latitude must error"),
+            st_perimeter_spheroid(&poly).expect_err("out-of-range latitude must error"),
+            st_area_sphere(&poly).expect_err("out-of-range latitude must error"),
+            st_perimeter_sphere(&poly).expect_err("out-of-range latitude must error"),
+        ] {
+            assert!(
+                format!("{err}").contains("latitude"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn curved_measures_of_empty_shapes_are_zero() {
+        let empty_line = geom_from_text("LINESTRING EMPTY", Some(4326)).unwrap();
+        let empty_poly = geom_from_text("POLYGON EMPTY", Some(4326)).unwrap();
+        assert_eq!(st_length_spheroid(&empty_line).unwrap(), 0.0);
+        assert_eq!(st_area_spheroid(&empty_poly).unwrap(), 0.0);
+        assert_eq!(st_perimeter_spheroid(&empty_poly).unwrap(), 0.0);
+        assert_eq!(st_area_sphere(&empty_poly).unwrap(), 0.0);
+        assert_eq!(st_perimeter_sphere(&empty_poly).unwrap(), 0.0);
     }
 }

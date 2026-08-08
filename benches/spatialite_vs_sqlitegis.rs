@@ -1072,6 +1072,160 @@ fn bench_y_throughput(c: &mut Criterion) {
     }
 }
 
+// ---- Curved-earth length, area and perimeter -------------------------
+
+// The seeded `regions` squares reach the south pole, where sqlitegis
+// refuses an out-of-range vertex, and 36 of them straddle the equator,
+// where SpatiaLite's ellipsoid area bails out. Clipping both edges once
+// at setup leaves the two engines measuring exactly the same rows without
+// paying for a filter inside the timed query. sqlitegis spells the bbox
+// accessors `ST_YMin`/`ST_YMax`, SpatiaLite `ST_MinY`/`ST_MaxY`.
+const CURVED_BAND_G: &str = "CREATE TABLE curved_regions AS SELECT geom FROM regions \
+     WHERE ST_YMin(geom) > -89.9 AND ST_YMax(geom) < -0.1";
+const CURVED_BAND_S: &str = "CREATE TABLE curved_regions AS SELECT geom FROM regions \
+     WHERE ST_MinY(geom) > -89.9 AND ST_MaxY(geom) < -0.1";
+const CURVED_RINGS: &str =
+    "CREATE TABLE curved_rings AS SELECT ST_ExteriorRing(geom) AS geom FROM curved_regions";
+
+/// Open both engines with the clipped polygon band and its exterior rings
+/// materialised, and report the row count the two agree on.
+unsafe fn open_curved_pair() -> (*mut sqlite3, *mut sqlite3, u64) {
+    unsafe {
+        let db_g = open_sqlitegis_db();
+        exec(db_g, CURVED_BAND_G);
+        exec(db_g, CURVED_RINGS);
+
+        let db_s = open_spatialite_db();
+        exec(db_s, CURVED_BAND_S);
+        exec(db_s, CURVED_RINGS);
+
+        let rows_g = query_count(db_g, "SELECT COUNT(*) FROM curved_regions");
+        let rows_s = query_count(db_s, "SELECT COUNT(*) FROM curved_regions");
+        assert_eq!(
+            rows_g, rows_s,
+            "both engines must measure the same rows for the comparison to mean anything"
+        );
+        let rows = u64::try_from(rows_g).expect("clipped row count is non-negative");
+        (db_g, db_s, rows)
+    }
+}
+
+/// `ST_LengthSpheroid`: Karney ellipsoid arc length per ring. SpatiaLite
+/// spells the same measure `GeodesicLength`, and the two agree exactly.
+fn bench_length_spheroid(c: &mut Criterion) {
+    let (db_g, db_s, rows) = unsafe { open_curved_pair() };
+    let sql_g = "SELECT SUM(ST_LengthSpheroid(geom)) FROM curved_rings";
+    let sql_s = "SELECT SUM(GeodesicLength(geom)) FROM curved_rings";
+
+    let mut group = c.benchmark_group("Geodesic length spheroid bulk");
+    group.throughput(Throughput::Elements(rows));
+    group.bench_function(BenchmarkId::new("sqlitegis", rows), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql_g)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", rows), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql_s)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_AreaSphere`: spherical polygon area per row. SpatiaLite reaches the
+/// same measure through the 2-arg `ST_Area(geom, use_ellipsoid)` with the
+/// flag off.
+fn bench_area_sphere(c: &mut Criterion) {
+    let (db_g, db_s, rows) = unsafe { open_curved_pair() };
+    let sql_g = "SELECT SUM(ST_AreaSphere(geom)) FROM curved_regions";
+    let sql_s = "SELECT SUM(ST_Area(geom, 0)) FROM curved_regions";
+
+    let mut group = c.benchmark_group("Geodesic area sphere bulk");
+    group.throughput(Throughput::Elements(rows));
+    group.bench_function(BenchmarkId::new("sqlitegis", rows), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql_g)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", rows), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql_s)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_AreaSpheroid`: Karney ellipsoid polygon area per row, against
+/// SpatiaLite's `ST_Area(geom, 1)`.
+fn bench_area_spheroid(c: &mut Criterion) {
+    let (db_g, db_s, rows) = unsafe { open_curved_pair() };
+    let sql_g = "SELECT SUM(ST_AreaSpheroid(geom)) FROM curved_regions";
+    let sql_s = "SELECT SUM(ST_Area(geom, 1)) FROM curved_regions";
+
+    let mut group = c.benchmark_group("Geodesic area spheroid bulk");
+    group.throughput(Throughput::Elements(rows));
+    group.bench_function(BenchmarkId::new("sqlitegis", rows), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql_g)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", rows), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql_s)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_PerimeterSphere`: Haversine ring walk per row, against SpatiaLite's
+/// `ST_Perimeter(geom, 0)`.
+fn bench_perimeter_sphere(c: &mut Criterion) {
+    let (db_g, db_s, rows) = unsafe { open_curved_pair() };
+    let sql_g = "SELECT SUM(ST_PerimeterSphere(geom)) FROM curved_regions";
+    let sql_s = "SELECT SUM(ST_Perimeter(geom, 0)) FROM curved_regions";
+
+    let mut group = c.benchmark_group("Geodesic perimeter sphere bulk");
+    group.throughput(Throughput::Elements(rows));
+    group.bench_function(BenchmarkId::new("sqlitegis", rows), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql_g)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", rows), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql_s)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
+/// `ST_PerimeterSpheroid`: Karney ellipsoid ring walk per row, against
+/// SpatiaLite's `ST_Perimeter(geom, 1)`. The two agree exactly.
+fn bench_perimeter_spheroid(c: &mut Criterion) {
+    let (db_g, db_s, rows) = unsafe { open_curved_pair() };
+    let sql_g = "SELECT SUM(ST_PerimeterSpheroid(geom)) FROM curved_regions";
+    let sql_s = "SELECT SUM(ST_Perimeter(geom, 1)) FROM curved_regions";
+
+    let mut group = c.benchmark_group("Geodesic perimeter spheroid bulk");
+    group.throughput(Throughput::Elements(rows));
+    group.bench_function(BenchmarkId::new("sqlitegis", rows), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_g, sql_g)) })
+    });
+    group.bench_function(BenchmarkId::new("spatialite", rows), |b| {
+        b.iter(|| unsafe { black_box(query_count(db_s, sql_s)) })
+    });
+    group.finish();
+
+    unsafe {
+        sqlite3_close(db_g);
+        sqlite3_close(db_s);
+    }
+}
+
 criterion_group!(
     benches,
     bench_bulk_intersects_unindexed,
@@ -1105,5 +1259,10 @@ criterion_group!(
     bench_perimeter_throughput,
     bench_x_throughput,
     bench_y_throughput,
+    bench_length_spheroid,
+    bench_area_sphere,
+    bench_area_spheroid,
+    bench_perimeter_sphere,
+    bench_perimeter_spheroid,
 );
 criterion_main!(benches);

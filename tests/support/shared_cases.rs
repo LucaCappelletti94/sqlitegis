@@ -1932,6 +1932,220 @@ fn st_length_sphere_multilinestring() {
     assert!(l > 600_000.0, "length_sphere = {l}");
 }
 
+// Curved-earth length, area and perimeter
+
+#[$test_attr]
+fn st_length_spheroid_matches_postgis_geography() {
+    let db = ActiveTestDb::open();
+    let l = db.query_f64(
+        "SELECT ST_LengthSpheroid(ST_SetSRID(ST_GeomFromText('LINESTRING(0 0, 1 1)'), 4326))",
+    );
+    assert!(
+        (l / 156_899.568_291_340_29 - 1.0).abs() < 1e-12,
+        "length_spheroid = {l}"
+    );
+}
+
+#[$test_attr]
+fn st_area_spheroid_matches_postgis_geography() {
+    let db = ActiveTestDb::open();
+    let a = db.query_f64(
+        "SELECT ST_AreaSpheroid(ST_SetSRID(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 4326))",
+    );
+    assert!(
+        (a / 12_308_778_361.469_454 - 1.0).abs() < 1e-12,
+        "area_spheroid = {a}"
+    );
+}
+
+#[$test_attr]
+fn st_perimeter_spheroid_matches_postgis_geography() {
+    let db = ActiveTestDb::open();
+    let p = db.query_f64(
+        "SELECT ST_PerimeterSpheroid(ST_SetSRID(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 4326))",
+    );
+    assert!(
+        (p / 443_770.917_248_302 - 1.0).abs() < 1e-12,
+        "perimeter_spheroid = {p}"
+    );
+}
+
+#[$test_attr]
+fn st_area_and_perimeter_sphere_use_the_same_earth_as_length_sphere() {
+    let db = ActiveTestDb::open();
+    let a = db.query_f64(
+        "SELECT ST_AreaSphere(ST_SetSRID(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 4326))",
+    );
+    assert!(
+        (a / 12_364_031_909.465_616 - 1.0).abs() < 1e-12,
+        "area_sphere = {a}"
+    );
+
+    // The ring walked as a line must give the same number as the perimeter.
+    let p = db.query_f64(
+        "SELECT ST_PerimeterSphere(ST_SetSRID(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 4326))",
+    );
+    let ring = db.query_f64(
+        "SELECT ST_LengthSphere(ST_SetSRID(ST_GeomFromText('LINESTRING(0 0,1 0,1 1,0 1,0 0)'), 4326))",
+    );
+    assert_eq!(p, ring, "perimeter_sphere = {p}, ring length = {ring}");
+}
+
+#[$test_attr]
+fn curved_measures_require_explicit_4326_srid() {
+    let db = ActiveTestDb::open();
+    for sql in [
+        "SELECT ST_LengthSpheroid(ST_GeomFromText('LINESTRING(0 0,1 1)'))",
+        "SELECT ST_AreaSpheroid(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'))",
+        "SELECT ST_PerimeterSpheroid(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'))",
+        "SELECT ST_AreaSphere(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'))",
+        "SELECT ST_PerimeterSphere(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'))",
+    ] {
+        let err = db
+            .try_query_i64(sql)
+            .expect_err("SRID-less curved-earth measure should error");
+        assert!(err.contains("requires SRID 4326"), "unexpected error: {err}");
+    }
+}
+
+#[$test_attr]
+fn curved_measures_reject_shapes_they_cannot_measure() {
+    let db = ActiveTestDb::open();
+    for (sql, expected) in [
+        (
+            "SELECT ST_LengthSpheroid(ST_SetSRID(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 4326))",
+            "LineString or MultiLineString",
+        ),
+        (
+            "SELECT ST_AreaSpheroid(ST_SetSRID(ST_GeomFromText('LINESTRING(0 0,1 1)'), 4326))",
+            "Polygon or MultiPolygon",
+        ),
+        (
+            "SELECT ST_PerimeterSpheroid(ST_SetSRID(ST_GeomFromText('LINESTRING(0 0,1 1)'), 4326))",
+            "Polygon or MultiPolygon",
+        ),
+        ("SELECT ST_AreaSphere(ST_Point(0, 0, 4326))", "Polygon or MultiPolygon"),
+        ("SELECT ST_PerimeterSphere(ST_Point(0, 0, 4326))", "Polygon or MultiPolygon"),
+    ] {
+        let err = db
+            .try_query_i64(sql)
+            .expect_err("wrong-shape curved-earth measure should error");
+        assert!(
+            err.contains("geometry is not a") && err.contains(expected),
+            "unexpected error: {err}"
+        );
+    }
+}
+
+// Densify and linear referencing
+
+#[$test_attr]
+fn st_segmentize_matches_postgis_across_the_three_models() {
+    let db = ActiveTestDb::open();
+    let planar = db.query_text(
+        "SELECT ST_AsText(ST_Segmentize(ST_GeomFromText('LINESTRING(0 0,4 0)'), 2.0))",
+    );
+    assert_eq!(planar, "LINESTRING(0 0,2 0,4 0)");
+
+    // PostGIS reads the same line as `geography` and answers these.
+    let sphere = db.query_text(
+        "SELECT ST_AsText(ST_SegmentizeSphere(ST_GeomFromText('LINESTRING(0 0, 90 60)', 4326), 3000000.0))",
+    );
+    assert!(
+        sphere.contains("26.56505117707"),
+        "segmentize_sphere = {sphere}"
+    );
+    let spheroid = db.query_text(
+        "SELECT ST_AsText(ST_SegmentizeSpheroid(ST_GeomFromText('LINESTRING(0 0, 90 60)', 4326), 3000000.0))",
+    );
+    assert!(
+        spheroid.contains("26.6063250799"),
+        "segmentize_spheroid = {spheroid}"
+    );
+}
+
+#[$test_attr]
+fn st_line_interpolate_point_matches_postgis_across_the_three_models() {
+    let db = ActiveTestDb::open();
+    let planar = db.query_text(
+        "SELECT ST_AsText(ST_LineInterpolatePoint(ST_GeomFromText('LINESTRING(0 0, 90 60)'), 0.5))",
+    );
+    assert_eq!(planar, "POINT(45 30)");
+
+    let sphere = db.query_text(
+        "SELECT ST_AsText(ST_LineInterpolatePointSphere(ST_GeomFromText('LINESTRING(0 0, 90 60)', 4326), 0.5))",
+    );
+    assert!(sphere.starts_with("POINT(26.56505117707"), "got {sphere}");
+
+    let spheroid = db.query_text(
+        "SELECT ST_AsText(ST_LineInterpolatePointSpheroid(ST_GeomFromText('LINESTRING(0 0, 90 60)', 4326), 0.5))",
+    );
+    assert!(spheroid.starts_with("POINT(26.6063250799"), "got {spheroid}");
+}
+
+#[$test_attr]
+fn st_line_interpolate_points_walks_the_whole_line() {
+    let db = ActiveTestDb::open();
+    let pts = db.query_text(
+        "SELECT ST_AsText(ST_LineInterpolatePoints(ST_GeomFromText('LINESTRING(0 0,4 0)'), 0.25))",
+    );
+    assert_eq!(pts, "MULTIPOINT(1 0,2 0,3 0,4 0)");
+}
+
+#[$test_attr]
+fn st_line_substring_matches_postgis() {
+    let db = ActiveTestDb::open();
+    let planar = db.query_text(
+        "SELECT ST_AsText(ST_LineSubstring(ST_GeomFromText('LINESTRING(0 0,4 0)'), 0.25, 0.75))",
+    );
+    assert_eq!(planar, "LINESTRING(1 0,3 0)");
+
+    let spheroid = db.query_text(
+        "SELECT ST_AsText(ST_LineSubstringSpheroid(ST_GeomFromText('LINESTRING(0 0, 90 60)', 4326), 0.25, 0.75))",
+    );
+    assert!(
+        spheroid.starts_with("LINESTRING(11.7167415715"),
+        "got {spheroid}"
+    );
+
+    // Equal fractions collapse to a Point, the way PostGIS does.
+    let degenerate = db.query_text(
+        "SELECT ST_AsText(ST_LineSubstring(ST_GeomFromText('LINESTRING(0 0,4 0)'), 0.5, 0.5))",
+    );
+    assert_eq!(degenerate, "POINT(2 0)");
+}
+
+#[$test_attr]
+fn st_length2dspheroid_is_st_lengthspheroid() {
+    let db = ActiveTestDb::open();
+    let a = db.query_f64(
+        "SELECT ST_Length2DSpheroid(ST_GeomFromText('LINESTRING(0 0, 90 60)', 4326))",
+    );
+    let b = db.query_f64(
+        "SELECT ST_LengthSpheroid(ST_GeomFromText('LINESTRING(0 0, 90 60)', 4326))",
+    );
+    assert_eq!(a, b);
+    // PostGIS answers this for the same line.
+    assert!((a / 10_006_182.686_819_194 - 1.0).abs() < 1e-12, "got {a}");
+}
+
+#[$test_attr]
+fn linear_referencing_rejects_bad_arguments() {
+    let db = ActiveTestDb::open();
+    for sql in [
+        "SELECT ST_LineInterpolatePoint(ST_GeomFromText('LINESTRING(0 0,4 0)'), 1.5)",
+        "SELECT ST_LineSubstring(ST_GeomFromText('LINESTRING(0 0,4 0)'), 0.75, 0.25)",
+        "SELECT ST_Segmentize(ST_GeomFromText('LINESTRING(0 0,4 0)'), 0.0)",
+        "SELECT ST_Segmentize(ST_Point(0, 0), 1.0)",
+        "SELECT ST_LineInterpolatePointSphere(ST_GeomFromText('LINESTRING(0 0,4 0)'), 0.5)",
+    ] {
+        assert!(
+            db.try_query_i64(sql).is_err(),
+            "should have errored: {sql}"
+        );
+    }
+}
+
 // MultiLineString planar length
 
 #[$test_attr]
