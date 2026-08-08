@@ -63,11 +63,13 @@ SELECT ST_Distance(ST_GeomFromText('POINT(0 0)'), ST_GeomFromText('POINT(3 4)'))
 
 ## Notes
 
-Geodesic functions (`ST_DistanceSphere`, `ST_DistanceSpheroid`, `ST_LengthSphere`, `ST_Azimuth`, `ST_Project`, `ST_DWithinSphere`, `ST_DWithinSpheroid`) require `SRID=4326` non-empty Point inputs and reject anything else. `ST_GeomFromGeoJSON` defaults to `SRID=4326`. `ST_DWithin*` predicates require a finite, non-negative distance.
+Geodesic functions require `SRID=4326` and reject any other shape. `ST_DistanceSphere`, `ST_DistanceSpheroid`, `ST_DWithinSphere`, `ST_DWithinSpheroid`, `ST_Azimuth` and `ST_Project` take non-empty Points. `ST_LengthSphere` and `ST_LengthSpheroid` take a LineString or MultiLineString. `ST_AreaSphere`, `ST_AreaSpheroid`, `ST_PerimeterSphere` and `ST_PerimeterSpheroid` take a Polygon or MultiPolygon. The `Spheroid` variants measure on the WGS84 ellipsoid (Karney) and agree with PostGIS `geography` to the last few digits, the `Sphere` variants on a sphere of the mean earth radius. `ST_GeomFromGeoJSON` defaults to `SRID=4326`. `ST_DWithin*` predicates require a finite, non-negative distance.
+
+Every measure and transform that depends on the shape of the earth comes in three forms: a plain name that works in the units of the CRS, a `Sphere` suffix that measures in metres on a sphere of the mean earth radius, and a `Spheroid` suffix that measures in metres on the WGS84 ellipsoid. That covers `ST_Length`, `ST_Area`, `ST_Perimeter`, `ST_Segmentize`, `ST_LineInterpolatePoint`, `ST_LineInterpolatePoints` and `ST_LineSubstring`. The linear-referencing three take a single LineString and a fraction in `[0, 1]`, and `ST_LineSubstring` collapses to a Point when both fractions are equal, matching PostGIS. `ST_Segmentize*` takes a LineString, MultiLineString, Polygon or MultiPolygon. `ST_Length2DSpheroid` is an alias of `ST_LengthSpheroid`, since this crate is 2D throughout.
 
 ## Benchmarks
 
-See [BENCHMARKS.md](https://github.com/LucaCappelletti94/sqlitegis/blob/main/BENCHMARKS.md) for the full R-tree and SpatiaLite comparison reports. Headline: on a 50k-row dataset across 31 head-to-head workloads, sqlitegis wins 20 (geodesic family 3.7x to 8.6x faster, binary predicates 1.2x to 1.7x via an MBR-only fastpath, I/O parse paths 2x faster) and loses 9 (`ST_Envelope`, `ST_AsBinary`, and the per-row scalar accessors `ST_X`/`ST_Y`/`ST_Area`/`ST_Perimeter` go through full EWKB decode where SpatiaLite has thin-C-wrapper shortcuts).
+See [BENCHMARKS.md](https://github.com/LucaCappelletti94/sqlitegis/blob/main/BENCHMARKS.md) for the full R-tree and SpatiaLite comparison reports. Headline: on a 50k-row dataset across 36 head-to-head workloads, sqlitegis wins 25 (curved-earth family 1.9x to 7.7x faster, binary predicates 1.2x to 1.7x via an MBR-only fastpath, I/O parse paths 2x faster) and loses 11 (`ST_Envelope`, `ST_AsBinary`, and the per-row scalar accessors `ST_X`/`ST_Y`/`ST_Area`/`ST_Perimeter` go through full EWKB decode where SpatiaLite has thin-C-wrapper shortcuts).
 
 ## Contributing
 
