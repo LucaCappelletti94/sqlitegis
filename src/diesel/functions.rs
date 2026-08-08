@@ -534,6 +534,31 @@ diesel::define_sql_function! {
 }
 
 diesel::define_sql_function! {
+    /// Geodesic arc length of a linestring in metres on the WGS84 ellipsoid.
+    fn st_lengthspheroid(geom: Nullable<Geometry>) -> Nullable<Double>;
+}
+
+diesel::define_sql_function! {
+    /// Area of a polygon in square metres on a sphere of the mean earth radius.
+    fn st_areasphere(geom: Nullable<Geometry>) -> Nullable<Double>;
+}
+
+diesel::define_sql_function! {
+    /// Area of a polygon in square metres on the WGS84 ellipsoid.
+    fn st_areaspheroid(geom: Nullable<Geometry>) -> Nullable<Double>;
+}
+
+diesel::define_sql_function! {
+    /// Haversine perimeter of a polygon in metres, interior rings included.
+    fn st_perimetersphere(geom: Nullable<Geometry>) -> Nullable<Double>;
+}
+
+diesel::define_sql_function! {
+    /// Perimeter of a polygon in metres on the WGS84 ellipsoid, interior rings included.
+    fn st_perimeterspheroid(geom: Nullable<Geometry>) -> Nullable<Double>;
+}
+
+diesel::define_sql_function! {
     /// Geodesic bearing from origin to target in radians (0 = north, clockwise).
     fn st_azimuth(origin: Nullable<Geometry>, target: Nullable<Geometry>) -> Nullable<Double>;
 }
@@ -546,6 +571,73 @@ diesel::define_sql_function! {
 diesel::define_sql_function! {
     /// Closest point on geometry A to point B.
     fn st_closestpoint(a: Nullable<Geometry>, b: Nullable<Geometry>) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Geodesic arc length of a linestring in metres, ignoring Z.
+    fn st_length2dspheroid(geom: Nullable<Geometry>) -> Nullable<Double>;
+}
+
+// Densify and linear referencing
+
+diesel::define_sql_function! {
+    /// Insert vertices so no segment exceeds the given length in CRS units.
+    fn st_segmentize(geom: Nullable<Geometry>, max_segment_length: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Insert vertices so no segment exceeds the given length in metres on a sphere.
+    fn st_segmentizesphere(geom: Nullable<Geometry>, max_segment_length: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Insert vertices so no segment exceeds the given length in metres on the WGS84 ellipsoid.
+    fn st_segmentizespheroid(geom: Nullable<Geometry>, max_segment_length: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Point a given fraction along a line, in CRS units.
+    fn st_lineinterpolatepoint(geom: Nullable<Geometry>, fraction: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Point a given fraction along a line measured on a sphere.
+    fn st_lineinterpolatepointsphere(geom: Nullable<Geometry>, fraction: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Point a given fraction along a line measured on the WGS84 ellipsoid.
+    fn st_lineinterpolatepointspheroid(geom: Nullable<Geometry>, fraction: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Points at every multiple of the fraction along a line, in CRS units.
+    fn st_lineinterpolatepoints(geom: Nullable<Geometry>, fraction: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Points at every multiple of the fraction along a line measured on a sphere.
+    fn st_lineinterpolatepointssphere(geom: Nullable<Geometry>, fraction: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Points at every multiple of the fraction along a line measured on the WGS84 ellipsoid.
+    fn st_lineinterpolatepointsspheroid(geom: Nullable<Geometry>, fraction: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Part of a line between two fractions of its length, in CRS units.
+    fn st_linesubstring(geom: Nullable<Geometry>, start_fraction: Double, end_fraction: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Part of a line between two fractions of its length measured on a sphere.
+    fn st_linesubstringsphere(geom: Nullable<Geometry>, start_fraction: Double, end_fraction: Double) -> Nullable<Geometry>;
+}
+
+diesel::define_sql_function! {
+    /// Part of a line between two fractions of its length measured on the WGS84 ellipsoid.
+    fn st_linesubstringspheroid(geom: Nullable<Geometry>, start_fraction: Double, end_fraction: Double) -> Nullable<Geometry>;
 }
 
 // Aliases

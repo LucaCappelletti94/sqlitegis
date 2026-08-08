@@ -708,6 +708,204 @@ pub trait GeometryExpressionMethods: Expression<SqlType = Nullable<Geometry>> + 
         functions::st_lengthsphere(self)
     }
 
+    /// Geodesic arc length of a linestring in metres on the WGS84 ellipsoid.
+    ///
+    /// See [`crate::diesel::functions::st_lengthspheroid()`] for an executable example.
+    fn st_lengthspheroid(self) -> functions::st_lengthspheroid<Self> {
+        functions::st_lengthspheroid(self)
+    }
+
+    /// Area of a polygon in square metres on a sphere of the mean earth radius.
+    ///
+    /// See [`crate::diesel::functions::st_areasphere()`] for an executable example.
+    fn st_areasphere(self) -> functions::st_areasphere<Self> {
+        functions::st_areasphere(self)
+    }
+
+    /// Area of a polygon in square metres on the WGS84 ellipsoid.
+    ///
+    /// See [`crate::diesel::functions::st_areaspheroid()`] for an executable example.
+    fn st_areaspheroid(self) -> functions::st_areaspheroid<Self> {
+        functions::st_areaspheroid(self)
+    }
+
+    /// Haversine perimeter of a polygon in metres, interior rings included.
+    ///
+    /// See [`crate::diesel::functions::st_perimetersphere()`] for an executable example.
+    fn st_perimetersphere(self) -> functions::st_perimetersphere<Self> {
+        functions::st_perimetersphere(self)
+    }
+
+    /// Perimeter of a polygon in metres on the WGS84 ellipsoid, interior rings included.
+    ///
+    /// See [`crate::diesel::functions::st_perimeterspheroid()`] for an executable example.
+    fn st_perimeterspheroid(self) -> functions::st_perimeterspheroid<Self> {
+        functions::st_perimeterspheroid(self)
+    }
+
+    /// Geodesic arc length of a linestring in metres, ignoring Z.
+    ///
+    /// See [`crate::diesel::functions::st_length2dspheroid()`] for an executable example.
+    fn st_length2dspheroid(self) -> functions::st_length2dspheroid<Self> {
+        functions::st_length2dspheroid(self)
+    }
+
+    /// Insert vertices so no segment exceeds the given length in CRS units.
+    ///
+    /// See [`crate::diesel::functions::st_segmentize()`] for an executable example.
+    fn st_segmentize<D>(self, max_segment_length: D) -> functions::st_segmentize<Self, D>
+    where
+        D: AsExpression<Double>,
+    {
+        functions::st_segmentize(self, max_segment_length)
+    }
+
+    /// Insert vertices so no segment exceeds the given length in metres on a sphere.
+    ///
+    /// See [`crate::diesel::functions::st_segmentizesphere()`] for an executable example.
+    fn st_segmentizesphere<D>(
+        self,
+        max_segment_length: D,
+    ) -> functions::st_segmentizesphere<Self, D>
+    where
+        D: AsExpression<Double>,
+    {
+        functions::st_segmentizesphere(self, max_segment_length)
+    }
+
+    /// Insert vertices so no segment exceeds the given length in metres on the WGS84 ellipsoid.
+    ///
+    /// See [`crate::diesel::functions::st_segmentizespheroid()`] for an executable example.
+    fn st_segmentizespheroid<D>(
+        self,
+        max_segment_length: D,
+    ) -> functions::st_segmentizespheroid<Self, D>
+    where
+        D: AsExpression<Double>,
+    {
+        functions::st_segmentizespheroid(self, max_segment_length)
+    }
+
+    /// Point a given fraction along this line, in CRS units.
+    ///
+    /// See [`crate::diesel::functions::st_lineinterpolatepoint()`] for an executable example.
+    fn st_lineinterpolatepoint<F>(self, fraction: F) -> functions::st_lineinterpolatepoint<Self, F>
+    where
+        F: AsExpression<Double>,
+    {
+        functions::st_lineinterpolatepoint(self, fraction)
+    }
+
+    /// Point a given fraction along this line measured on a sphere.
+    ///
+    /// See [`crate::diesel::functions::st_lineinterpolatepointsphere()`] for an executable example.
+    fn st_lineinterpolatepointsphere<F>(
+        self,
+        fraction: F,
+    ) -> functions::st_lineinterpolatepointsphere<Self, F>
+    where
+        F: AsExpression<Double>,
+    {
+        functions::st_lineinterpolatepointsphere(self, fraction)
+    }
+
+    /// Point a given fraction along this line measured on the WGS84 ellipsoid.
+    ///
+    /// See [`crate::diesel::functions::st_lineinterpolatepointspheroid()`] for an executable example.
+    fn st_lineinterpolatepointspheroid<F>(
+        self,
+        fraction: F,
+    ) -> functions::st_lineinterpolatepointspheroid<Self, F>
+    where
+        F: AsExpression<Double>,
+    {
+        functions::st_lineinterpolatepointspheroid(self, fraction)
+    }
+
+    /// Points at every multiple of the fraction along this line, in CRS units.
+    ///
+    /// See [`crate::diesel::functions::st_lineinterpolatepoints()`] for an executable example.
+    fn st_lineinterpolatepoints<F>(
+        self,
+        fraction: F,
+    ) -> functions::st_lineinterpolatepoints<Self, F>
+    where
+        F: AsExpression<Double>,
+    {
+        functions::st_lineinterpolatepoints(self, fraction)
+    }
+
+    /// Points at every multiple of the fraction along this line measured on a sphere.
+    ///
+    /// See [`crate::diesel::functions::st_lineinterpolatepointssphere()`] for an executable example.
+    fn st_lineinterpolatepointssphere<F>(
+        self,
+        fraction: F,
+    ) -> functions::st_lineinterpolatepointssphere<Self, F>
+    where
+        F: AsExpression<Double>,
+    {
+        functions::st_lineinterpolatepointssphere(self, fraction)
+    }
+
+    /// Points at every multiple of the fraction along this line measured on the WGS84 ellipsoid.
+    ///
+    /// See [`crate::diesel::functions::st_lineinterpolatepointsspheroid()`] for an executable example.
+    fn st_lineinterpolatepointsspheroid<F>(
+        self,
+        fraction: F,
+    ) -> functions::st_lineinterpolatepointsspheroid<Self, F>
+    where
+        F: AsExpression<Double>,
+    {
+        functions::st_lineinterpolatepointsspheroid(self, fraction)
+    }
+
+    /// Part of this line between two fractions of its length, in CRS units.
+    ///
+    /// See [`crate::diesel::functions::st_linesubstring()`] for an executable example.
+    fn st_linesubstring<S, E>(
+        self,
+        start_fraction: S,
+        end_fraction: E,
+    ) -> functions::st_linesubstring<Self, S, E>
+    where
+        S: AsExpression<Double>,
+        E: AsExpression<Double>,
+    {
+        functions::st_linesubstring(self, start_fraction, end_fraction)
+    }
+
+    /// Part of this line between two fractions of its length measured on a sphere.
+    ///
+    /// See [`crate::diesel::functions::st_linesubstringsphere()`] for an executable example.
+    fn st_linesubstringsphere<S, E>(
+        self,
+        start_fraction: S,
+        end_fraction: E,
+    ) -> functions::st_linesubstringsphere<Self, S, E>
+    where
+        S: AsExpression<Double>,
+        E: AsExpression<Double>,
+    {
+        functions::st_linesubstringsphere(self, start_fraction, end_fraction)
+    }
+
+    /// Part of this line between two fractions of its length measured on the WGS84 ellipsoid.
+    ///
+    /// See [`crate::diesel::functions::st_linesubstringspheroid()`] for an executable example.
+    fn st_linesubstringspheroid<S, E>(
+        self,
+        start_fraction: S,
+        end_fraction: E,
+    ) -> functions::st_linesubstringspheroid<Self, S, E>
+    where
+        S: AsExpression<Double>,
+        E: AsExpression<Double>,
+    {
+        functions::st_linesubstringspheroid(self, start_fraction, end_fraction)
+    }
+
     /// Geodesic bearing from this geometry to target in radians (0 = north, clockwise).
     ///
     /// See [`crate::diesel::functions::st_azimuth()`] for an executable example.

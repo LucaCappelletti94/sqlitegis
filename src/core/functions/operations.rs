@@ -6,6 +6,8 @@ use std::cmp::Ordering;
 
 use geo::algorithm::bool_ops::BooleanOps;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
+use geo::algorithm::line_measures::metric_spaces::{Euclidean, Geodesic, Haversine};
+use geo::algorithm::line_measures::Densify;
 use geo::algorithm::Buffer;
 use geo::algorithm::Intersects;
 use geo::{
@@ -467,6 +469,129 @@ pub fn st_buffer(blob: &[u8], distance: f64) -> Result<Vec<u8>> {
     })
 }
 
+/// Reject a segment length that is not a positive real number, the way
+/// PostGIS does with "invalid max_distance 0 (must be >= 0)".
+fn require_segment_length(value: f64, fn_name: &str) -> Result<f64> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(SqliteGisError::InvalidInput(format!(
+            "{fn_name}: max_segment_length must be finite and greater than 0, got {value}"
+        )));
+    }
+    Ok(value)
+}
+
+/// Split every segment of a geometry so none is longer than `max`, measured
+/// in `metric`. `geo` densifies lineal and areal shapes, which is the same
+/// set PostGIS actually changes.
+fn densify_geometry<M: Densify<f64>>(
+    geom: &Geometry<f64>,
+    metric: &M,
+    max: f64,
+) -> Result<Geometry<f64>> {
+    Ok(match geom {
+        Geometry::LineString(ls) => Geometry::LineString(metric.densify(ls, max)),
+        Geometry::MultiLineString(mls) => Geometry::MultiLineString(metric.densify(mls, max)),
+        Geometry::Polygon(p) => Geometry::Polygon(metric.densify(p, max)),
+        Geometry::MultiPolygon(mp) => Geometry::MultiPolygon(metric.densify(mp, max)),
+        other => {
+            return Err(SqliteGisError::wrong_type(
+                "LineString, MultiLineString, Polygon or MultiPolygon",
+                other,
+            ))
+        }
+    })
+}
+
+/// ST_Segmentize: insert vertices so no segment is longer than
+/// `max_segment_length`, in the units of the CRS.
+///
+/// # Example
+///
+/// ```
+/// use sqlitegis::core::functions::operations::st_segmentize;
+/// use sqlitegis::core::functions::io::{as_text, geom_from_text};
+///
+/// let line = geom_from_text("LINESTRING(0 0, 4 0)", None).unwrap();
+/// let dense = st_segmentize(&line, 2.0).unwrap();
+/// assert_eq!(as_text(&dense).unwrap(), "LINESTRING(0 0,2 0,4 0)");
+/// ```
+pub fn st_segmentize(blob: &[u8], max_segment_length: f64) -> Result<Vec<u8>> {
+    let max = require_segment_length(max_segment_length, "ST_Segmentize")?;
+    let (geom, srid) = parse_ewkb(blob)?;
+    write_ewkb(&densify_geometry(&geom, &Euclidean, max)?, srid)
+}
+
+/// ST_SegmentizeSphere: `ST_Segmentize` with the limit in metres along a
+/// sphere of the mean earth radius (SRID 4326).
+///
+/// # Example
+///
+/// ```
+/// use sqlitegis::core::functions::operations::st_segmentize_sphere;
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let line = geom_from_text("LINESTRING(0 0, 90 60)", Some(4326)).unwrap();
+/// assert!(st_segmentize_sphere(&line, 3_000_000.0).is_ok());
+/// ```
+pub fn st_segmentize_sphere(blob: &[u8], max_segment_length: f64) -> Result<Vec<u8>> {
+    let max = require_segment_length(max_segment_length, "ST_SegmentizeSphere")?;
+    let (geom, srid) = parse_geographic("ST_SegmentizeSphere", blob)?;
+    write_ewkb(&densify_geometry(&geom, &Haversine, max)?, srid)
+}
+
+/// ST_SegmentizeSpheroid: `ST_Segmentize` with the limit in metres along the
+/// WGS84 ellipsoid (Karney, SRID 4326).
+///
+/// # Example
+///
+/// ```
+/// use sqlitegis::core::functions::operations::st_segmentize_spheroid;
+/// use sqlitegis::core::functions::io::geom_from_text;
+///
+/// let line = geom_from_text("LINESTRING(0 0, 90 60)", Some(4326)).unwrap();
+/// assert!(st_segmentize_spheroid(&line, 3_000_000.0).is_ok());
+/// ```
+pub fn st_segmentize_spheroid(blob: &[u8], max_segment_length: f64) -> Result<Vec<u8>> {
+    let max = require_segment_length(max_segment_length, "ST_SegmentizeSpheroid")?;
+    let (geom, srid) = parse_geographic("ST_SegmentizeSpheroid", blob)?;
+    write_ewkb(&densify_geometry(&geom, &Geodesic, max)?, srid)
+}
+
+/// Parse for the curved segmentize forms: SRID 4326 and every vertex latitude
+/// in range, matching the rest of the curved-earth surface.
+fn parse_geographic(fn_name: &str, blob: &[u8]) -> Result<(Geometry<f64>, Option<i32>)> {
+    use crate::core::functions::measurement::{
+        ensure_geographic_srid, require_geographic_line_latitudes,
+    };
+    let (geom, srid) = parse_ewkb(blob)?;
+    ensure_geographic_srid(srid, fn_name)?;
+    match &geom {
+        Geometry::LineString(ls) => require_geographic_line_latitudes(ls, fn_name)?,
+        Geometry::MultiLineString(mls) => {
+            for ls in &mls.0 {
+                require_geographic_line_latitudes(ls, fn_name)?;
+            }
+        }
+        Geometry::Polygon(p) => require_geographic_polygon_rings(p, fn_name)?,
+        Geometry::MultiPolygon(mp) => {
+            for p in &mp.0 {
+                require_geographic_polygon_rings(p, fn_name)?;
+            }
+        }
+        _ => {}
+    }
+    Ok((geom, srid))
+}
+
+fn require_geographic_polygon_rings(poly: &Polygon<f64>, fn_name: &str) -> Result<()> {
+    use crate::core::functions::measurement::require_geographic_line_latitudes;
+    require_geographic_line_latitudes(poly.exterior(), fn_name)?;
+    for ring in poly.interiors() {
+        require_geographic_line_latitudes(ring, fn_name)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -917,5 +1042,220 @@ mod tests {
         let text = as_text(&r).unwrap();
         assert!(text.contains("POINT(0.5 0.5)"), "actual: {text}");
         assert!(text.contains("POLYGON"), "actual: {text}");
+    }
+
+    // -- Segmentize ---------------------------------------------------
+
+    /// Reference values are PostGIS 3.5 readings. Its `geography` form
+    /// measures on the sphere, so `ST_SegmentizeSpheroid` has no PostGIS
+    /// counterpart to read and is pinned to the geodesic interpolation of
+    /// the same line instead.
+    fn assert_wkt_close(got: &str, want: &str) {
+        let nums = |s: &str| -> Vec<f64> {
+            s.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e'))
+                .filter(|t| !t.is_empty())
+                .filter_map(|t| t.parse::<f64>().ok())
+                .collect()
+        };
+        let (g, w) = (nums(got), nums(want));
+        assert_eq!(g.len(), w.len(), "shape differs: got {got}, want {want}");
+        for (a, b) in g.iter().zip(w.iter()) {
+            assert!((a - b).abs() < 1e-9, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn segmentize_planar_matches_postgis() {
+        let line = geom_from_text("LINESTRING(0 0, 90 60)", None).unwrap();
+        let out = st_segmentize(&line, 30.0).unwrap();
+        assert_wkt_close(
+            &as_text(&out).unwrap(),
+            "LINESTRING(0 0,22.5 15,45 30,67.5 45,90 60)",
+        );
+    }
+
+    #[test]
+    fn segmentize_sphere_matches_postgis_geography() {
+        let line = geom_from_text("LINESTRING(0 0, 90 60)", Some(4326)).unwrap();
+        let out = st_segmentize_sphere(&line, 3_000_000.0).unwrap();
+        assert_wkt_close(
+            &as_text(&out).unwrap(),
+            "LINESTRING(0 0,11.700919508154 19.35459615165,26.565051177078 37.761243907035,50.360727762244 53.139953123517,90 60)",
+        );
+    }
+
+    #[test]
+    fn segmentize_spheroid_lands_on_geodesic_interpolations() {
+        let line = geom_from_text("LINESTRING(0 0, 90 60)", Some(4326)).unwrap();
+        let out = st_segmentize_spheroid(&line, 3_000_000.0).unwrap();
+        // PostGIS readings of ST_LineInterpolatePoint(geography, f, true).
+        assert_wkt_close(
+            &as_text(&out).unwrap(),
+            "LINESTRING(0 0,11.716741571563 19.435698270019,26.606325079977 37.874403088301,50.432454297567 53.213438567481,90 60)",
+        );
+    }
+
+    #[test]
+    fn segmentize_leaves_a_short_enough_line_alone() {
+        let line = geom_from_text("LINESTRING(0 0, 1 0)", None).unwrap();
+        let out = st_segmentize(&line, 10.0).unwrap();
+        assert_wkt_close(&as_text(&out).unwrap(), "LINESTRING(0 0,1 0)");
+    }
+
+    #[test]
+    fn segmentize_densifies_polygon_rings() {
+        let poly = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
+        let out = st_segmentize(&poly, 0.6).unwrap();
+        assert_wkt_close(
+            &as_text(&out).unwrap(),
+            "POLYGON((0 0,0.5 0,1 0,1 0.5,1 1,0.5 1,0 1,0 0.5,0 0))",
+        );
+    }
+
+    #[test]
+    fn segmentize_rejects_a_non_positive_length() {
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let line = geom_from_text("LINESTRING(0 0, 1 1)", None).unwrap();
+            let err = st_segmentize(&line, bad).expect_err("must reject");
+            assert!(
+                format!("{err}").contains("max_segment_length"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn segmentize_rejects_shapes_without_segments() {
+        let pt = geom_from_text("POINT(0 0)", None).unwrap();
+        let geographic_pt = geom_from_text("POINT(0 0)", Some(4326)).unwrap();
+        // The curved forms reach the same rejection past their SRID and
+        // latitude guards, which have no ring to walk on a Point.
+        for err in [
+            st_segmentize(&pt, 1.0).expect_err("a point has no segments"),
+            st_segmentize_sphere(&geographic_pt, 1000.0).expect_err("a point has no segments"),
+            st_segmentize_spheroid(&geographic_pt, 1000.0).expect_err("a point has no segments"),
+        ] {
+            assert!(
+                format!("{err}").contains("LineString"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn curved_segmentize_requires_srid_4326() {
+        let line = geom_from_text("LINESTRING(0 0, 1 1)", None).unwrap();
+        for err in [
+            st_segmentize_sphere(&line, 1000.0).expect_err("needs SRID"),
+            st_segmentize_spheroid(&line, 1000.0).expect_err("needs SRID"),
+        ] {
+            assert!(
+                format!("{err}").contains("requires SRID 4326"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn curved_segmentize_rejects_out_of_range_latitude() {
+        let bad = geom_from_text("LINESTRING(0 0, 10 95)", Some(4326)).unwrap();
+        assert!(st_segmentize_sphere(&bad, 100_000.0).is_err());
+        assert!(st_segmentize_spheroid(&bad, 100_000.0).is_err());
+    }
+
+    #[test]
+    fn segmentize_planar_handles_multi_part_shapes() {
+        let multiline = geom_from_text("MULTILINESTRING((0 0,4 0),(0 2,2 2))", None).unwrap();
+        assert_wkt_close(
+            &as_text(&st_segmentize(&multiline, 2.0).unwrap()).unwrap(),
+            "MULTILINESTRING((0 0,2 0,4 0),(0 2,2 2))",
+        );
+
+        let multipoly = geom_from_text(
+            "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((5 5,7 5,7 7,5 7,5 5)))",
+            None,
+        )
+        .unwrap();
+        assert_wkt_close(
+            &as_text(&st_segmentize(&multipoly, 2.0).unwrap()).unwrap(),
+            "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((5 5,7 5,7 7,5 7,5 5)))",
+        );
+    }
+
+    #[test]
+    fn segmentize_sphere_bulges_polygon_rings_along_great_circles() {
+        // The inserted vertex on the northern edge sits at 10.0374 rather than
+        // 10, because a great circle between two points at the same latitude
+        // bows poleward. PostGIS reads the same value off `geography`.
+        let poly = geom_from_text("POLYGON((0 0,10 0,10 10,0 10,0 0))", Some(4326)).unwrap();
+        assert_wkt_close(
+            &as_text(&st_segmentize_sphere(&poly, 700_000.0).unwrap()).unwrap(),
+            "POLYGON((0 0,5 0,10 0,10 5,10 10,5 10.037423045911,0 10,0 5,0 0))",
+        );
+    }
+
+    #[test]
+    fn segmentize_sphere_handles_multilinestring() {
+        let multiline =
+            geom_from_text("MULTILINESTRING((0 0,10 0),(0 2,10 2))", Some(4326)).unwrap();
+        assert_wkt_close(
+            &as_text(&st_segmentize_sphere(&multiline, 700_000.0).unwrap()).unwrap(),
+            "MULTILINESTRING((0 0,5 0,10 0),(0 2,5 2.007633435231,10 2))",
+        );
+    }
+
+    #[test]
+    fn segmentize_spheroid_handles_multipolygon() {
+        let multipoly = geom_from_text(
+            "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((5 5,7 5,7 7,5 7,5 5)))",
+            Some(4326),
+        )
+        .unwrap();
+        let out = st_segmentize_spheroid(&multipoly, 100_000.0).unwrap();
+        let (geom, srid) = parse_ewkb(&out).unwrap();
+        assert_eq!(srid, Some(4326));
+        let Geometry::MultiPolygon(parts) = geom else {
+            panic!("expected a MultiPolygon, got {geom:?}");
+        };
+        assert_eq!(parts.0.len(), 2);
+        // Each 2-degree ring is roughly 222 km a side, so a 100 km limit has
+        // to have split every side of both parts.
+        for part in &parts.0 {
+            assert!(
+                part.exterior().0.len() > 5,
+                "part was left undensified: {part:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn curved_segmentize_checks_every_ring_of_every_part() {
+        // Exercises the polygon and multipolygon arms of the latitude guard,
+        // including interior rings, which the LineString case never reaches.
+        let bad_shell = geom_from_text("POLYGON((0 0,10 0,10 95,0 95,0 0))", Some(4326)).unwrap();
+        let bad_hole = geom_from_text(
+            "POLYGON((0 0,10 0,10 10,0 10,0 0),(1 1,2 1,2 95,1 95,1 1))",
+            Some(4326),
+        )
+        .unwrap();
+        let bad_part = geom_from_text(
+            "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((20 20,21 20,21 95,20 95,20 20)))",
+            Some(4326),
+        )
+        .unwrap();
+        let bad_multiline =
+            geom_from_text("MULTILINESTRING((0 0,1 1),(2 2,3 95))", Some(4326)).unwrap();
+
+        for geom in [&bad_shell, &bad_hole, &bad_part, &bad_multiline] {
+            for err in [
+                st_segmentize_sphere(geom, 100_000.0).expect_err("out-of-range latitude"),
+                st_segmentize_spheroid(geom, 100_000.0).expect_err("out-of-range latitude"),
+            ] {
+                assert!(
+                    format!("{err}").contains("latitude"),
+                    "unexpected error: {err}"
+                );
+            }
+        }
     }
 }

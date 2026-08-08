@@ -61,6 +61,7 @@ bench-spatialite = []
 
 [dependencies]
 geo = { workspace = true }
+geographiclib-rs = { workspace = true }
 geozero = { version = "0.15", features = ["with-wkt", "with-geojson", "with-svg", "with-geo", "with-wkb"] }
 thiserror = "2"
 serde_json = "1"
@@ -154,6 +155,10 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 geo = { version = "0.33", default-features = false }
+# Pinned to what geo itself depends on so the two share one build. Used
+# directly for spherical area, which geo only exposes at a fixed equatorial
+# radius that disagrees with its own Haversine radius.
+geographiclib-rs = { version = "0.2.3", default-features = false }
 libsqlite3-sys = { version = ">=0.17.2, <0.38.0" }
 
 [profile.release]

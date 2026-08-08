@@ -536,6 +536,43 @@ pub const SQLITE_DETERMINISTIC_FUNCTIONS: &[SqliteFunctionSpec] = &[
         "SELECT ST_LengthSphere(ST_GeomFromText('LINESTRING(0 0,0 1)', 4326))"
     ),
     spec!(
+        "ST_LengthSpheroid",
+        1,
+        Numeric,
+        "SELECT ST_LengthSpheroid(ST_GeomFromText('LINESTRING(0 0,0 1)', 4326))"
+    ),
+    spec_override!(
+        "ST_Length2DSpheroid",
+        1,
+        Numeric,
+        "SELECT ST_Length2DSpheroid(ST_GeomFromText('LINESTRING(0 0,0 1)', 4326))",
+        "st_lengthspheroid_xfunc"
+    ),
+    spec!(
+        "ST_AreaSphere",
+        1,
+        Numeric,
+        "SELECT ST_AreaSphere(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))', 4326))"
+    ),
+    spec!(
+        "ST_AreaSpheroid",
+        1,
+        Numeric,
+        "SELECT ST_AreaSpheroid(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))', 4326))"
+    ),
+    spec!(
+        "ST_PerimeterSphere",
+        1,
+        Numeric,
+        "SELECT ST_PerimeterSphere(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))', 4326))"
+    ),
+    spec!(
+        "ST_PerimeterSpheroid",
+        1,
+        Numeric,
+        "SELECT ST_PerimeterSpheroid(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))', 4326))"
+    ),
+    spec!(
         "ST_Azimuth",
         2,
         Numeric,
@@ -583,6 +620,79 @@ pub const SQLITE_DETERMINISTIC_FUNCTIONS: &[SqliteFunctionSpec] = &[
         2,
         Blob,
         "SELECT ST_Buffer(ST_Point(0, 0), 1.0)"
+    ),
+    spec!(
+        "ST_Segmentize",
+        2,
+        Blob,
+        "SELECT ST_Segmentize(ST_GeomFromText('LINESTRING(0 0,4 0)'), 2.0)"
+    ),
+    spec!(
+        "ST_SegmentizeSphere",
+        2,
+        Blob,
+        "SELECT ST_SegmentizeSphere(ST_GeomFromText('LINESTRING(0 0,4 0)', 4326), 100000.0)"
+    ),
+    spec!(
+        "ST_SegmentizeSpheroid",
+        2,
+        Blob,
+        "SELECT ST_SegmentizeSpheroid(ST_GeomFromText('LINESTRING(0 0,4 0)', 4326), 100000.0)"
+    ),
+    // Linear referencing
+    spec!(
+        "ST_LineInterpolatePoint",
+        2,
+        Blob,
+        "SELECT ST_LineInterpolatePoint(ST_GeomFromText('LINESTRING(0 0,4 0)'), 0.5)"
+    ),
+    spec!(
+        "ST_LineInterpolatePointSphere",
+        2,
+        Blob,
+        "SELECT ST_LineInterpolatePointSphere(ST_GeomFromText('LINESTRING(0 0,4 0)', 4326), 0.5)"
+    ),
+    spec!(
+        "ST_LineInterpolatePointSpheroid",
+        2,
+        Blob,
+        "SELECT ST_LineInterpolatePointSpheroid(ST_GeomFromText('LINESTRING(0 0,4 0)', 4326), 0.5)"
+    ),
+    spec!(
+        "ST_LineInterpolatePoints",
+        2,
+        Blob,
+        "SELECT ST_LineInterpolatePoints(ST_GeomFromText('LINESTRING(0 0,4 0)'), 0.5)"
+    ),
+    spec!(
+        "ST_LineInterpolatePointsSphere",
+        2,
+        Blob,
+        "SELECT ST_LineInterpolatePointsSphere(ST_GeomFromText('LINESTRING(0 0,4 0)', 4326), 0.5)"
+    ),
+    spec!(
+        "ST_LineInterpolatePointsSpheroid",
+        2,
+        Blob,
+        "SELECT ST_LineInterpolatePointsSpheroid(ST_GeomFromText('LINESTRING(0 0,4 0)', 4326), 0.5)"
+    ),
+    spec!(
+        "ST_LineSubstring",
+        3,
+        Blob,
+        "SELECT ST_LineSubstring(ST_GeomFromText('LINESTRING(0 0,4 0)'), 0.25, 0.75)"
+    ),
+    spec!(
+        "ST_LineSubstringSphere",
+        3,
+        Blob,
+        "SELECT ST_LineSubstringSphere(ST_GeomFromText('LINESTRING(0 0,4 0)', 4326), 0.25, 0.75)"
+    ),
+    spec!(
+        "ST_LineSubstringSpheroid",
+        3,
+        Blob,
+        "SELECT ST_LineSubstringSpheroid(ST_GeomFromText('LINESTRING(0 0,4 0)', 4326), 0.25, 0.75)"
     ),
     // Predicates
     spec!(

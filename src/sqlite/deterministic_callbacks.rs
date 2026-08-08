@@ -69,6 +69,12 @@ const SQLITE_DETERMINISTIC_CALLBACKS: &[SqliteCallbackSpec] = &[
     callback_spec!("ST_DistanceSphere", 2, st_distancesphere_xfunc),
     callback_spec!("ST_DistanceSpheroid", 2, st_distancespheroid_xfunc),
     callback_spec!("ST_LengthSphere", 1, st_lengthsphere_xfunc),
+    callback_spec!("ST_LengthSpheroid", 1, st_lengthspheroid_xfunc),
+    callback_spec!("ST_Length2DSpheroid", 1, st_lengthspheroid_xfunc),
+    callback_spec!("ST_AreaSphere", 1, st_areasphere_xfunc),
+    callback_spec!("ST_AreaSpheroid", 1, st_areaspheroid_xfunc),
+    callback_spec!("ST_PerimeterSphere", 1, st_perimetersphere_xfunc),
+    callback_spec!("ST_PerimeterSpheroid", 1, st_perimeterspheroid_xfunc),
     callback_spec!("ST_Azimuth", 2, st_azimuth_xfunc),
     callback_spec!("ST_Project", 3, st_project_xfunc),
     callback_spec!("ST_ClosestPoint", 2, st_closestpoint_xfunc),
@@ -77,6 +83,38 @@ const SQLITE_DETERMINISTIC_CALLBACKS: &[SqliteCallbackSpec] = &[
     callback_spec!("ST_Difference", 2, st_difference_xfunc),
     callback_spec!("ST_SymDifference", 2, st_symdifference_xfunc),
     callback_spec!("ST_Buffer", 2, st_buffer_xfunc),
+    callback_spec!("ST_Segmentize", 2, st_segmentize_xfunc),
+    callback_spec!("ST_SegmentizeSphere", 2, st_segmentizesphere_xfunc),
+    callback_spec!("ST_SegmentizeSpheroid", 2, st_segmentizespheroid_xfunc),
+    callback_spec!("ST_LineInterpolatePoint", 2, st_lineinterpolatepoint_xfunc),
+    callback_spec!(
+        "ST_LineInterpolatePointSphere",
+        2,
+        st_lineinterpolatepointsphere_xfunc
+    ),
+    callback_spec!(
+        "ST_LineInterpolatePointSpheroid",
+        2,
+        st_lineinterpolatepointspheroid_xfunc
+    ),
+    callback_spec!("ST_LineInterpolatePoints", 2, st_lineinterpolatepoints_xfunc),
+    callback_spec!(
+        "ST_LineInterpolatePointsSphere",
+        2,
+        st_lineinterpolatepointssphere_xfunc
+    ),
+    callback_spec!(
+        "ST_LineInterpolatePointsSpheroid",
+        2,
+        st_lineinterpolatepointsspheroid_xfunc
+    ),
+    callback_spec!("ST_LineSubstring", 3, st_linesubstring_xfunc),
+    callback_spec!("ST_LineSubstringSphere", 3, st_linesubstringsphere_xfunc),
+    callback_spec!(
+        "ST_LineSubstringSpheroid",
+        3,
+        st_linesubstringspheroid_xfunc
+    ),
     callback_spec!("ST_Intersects", 2, st_intersects_xfunc),
     callback_spec!("ST_Contains", 2, st_contains_xfunc),
     callback_spec!("ST_Within", 2, st_within_xfunc),

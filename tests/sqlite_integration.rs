@@ -95,6 +95,100 @@ fn sqlite_runtime_load_extension_registers_spatial_functions() {
             .into_owned();
         sqlite3_finalize(stmt);
         assert_eq!(out, "POINT(1 2)");
+
+        // Everything above went through four of the routines `host_api`
+        // dispatches. The rest have to be exercised through the loaded
+        // extension too: a wrong offset in that table lands on some other
+        // SQLite routine, and the only place that shows up is the call site.
+        assert_eq!(
+            ext_scalar(
+                db,
+                "SELECT ST_Area(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'))"
+            ),
+            Ok(Some("1.0".to_string())),
+            "result_double"
+        );
+        assert_eq!(
+            ext_scalar(db, "SELECT ST_SRID(ST_SetSRID(ST_Point(1.5, 2.5), 4326))"),
+            Ok(Some("4326".to_string())),
+            "result_int, value_double and value_int64"
+        );
+        assert_eq!(
+            ext_scalar(
+                db,
+                "SELECT ST_NPoints(ST_GeomFromText('LINESTRING(0 0,1 1,2 2)'))"
+            ),
+            Ok(Some("3".to_string())),
+            "result_int64"
+        );
+        assert_eq!(
+            ext_scalar(db, "SELECT ST_XMin(ST_GeomFromText('POINT EMPTY'))"),
+            Ok(None),
+            "result_null"
+        );
+        match ext_scalar(
+            db,
+            "SELECT ST_LengthSpheroid(ST_GeomFromText('LINESTRING(0 0,1 1)'))",
+        ) {
+            Err(msg) => assert!(msg.contains("requires SRID 4326"), "result_error: {msg}"),
+            other => panic!("expected an error through the extension, got {other:?}"),
+        }
+
+        // CreateSpatialIndex runs statements on the host connection, which
+        // covers context_db_handle, exec, prepare_v2, step, column_type,
+        // column_text, finalize, errmsg and free in one go.
+        assert_eq!(
+            ext_scalar(
+                db,
+                "CREATE TABLE places (id INTEGER PRIMARY KEY, geom BLOB)"
+            ),
+            Ok(None)
+        );
+        assert_eq!(
+            ext_scalar(db, "SELECT CreateSpatialIndex('places', 'geom')"),
+            Ok(Some("1".to_string())),
+            "statement-execution routines"
+        );
+        assert_eq!(
+            ext_scalar(db, "SELECT DropSpatialIndex('places', 'geom')"),
+            Ok(Some("1".to_string())),
+            "statement-execution routines"
+        );
+    }
+}
+
+/// Run `sql` on `db` and return the first column of the first row as text,
+/// `None` for SQL NULL or no rows, or the SQLite error message.
+///
+/// # Safety
+///
+/// `db` must be an open connection.
+unsafe fn ext_scalar(db: *mut sqlite3, sql: &str) -> Result<Option<String>, String> {
+    unsafe {
+        let sql_c = CString::new(sql).expect("test SQL must not contain NUL");
+        let mut stmt = ptr::null_mut();
+        if sqlite3_prepare_v2(db, sql_c.as_ptr(), -1, &mut stmt, ptr::null_mut()) != SQLITE_OK {
+            return Err(sqlite_errmsg(db));
+        }
+        let rc = sqlite3_step(stmt);
+        let out = if rc == SQLITE_ROW {
+            let ptr = sqlite3_column_text(stmt, 0);
+            if ptr.is_null() {
+                Ok(None)
+            } else {
+                Ok(Some(
+                    CStr::from_ptr(ptr as *const std::os::raw::c_char)
+                        .to_string_lossy()
+                        .into_owned(),
+                ))
+            }
+        } else if rc == SQLITE_DONE {
+            Ok(None)
+        } else {
+            Err(sqlite_errmsg(db))
+        };
+        sqlite3_finalize(stmt);
+        out
     }
 }
 

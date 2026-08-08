@@ -4,6 +4,7 @@
 //! that make the cdylib loadable via SQLite's `load_extension`.
 
 mod ffi;
+mod host_api;
 mod sqlite_compat;
 
 pub use ffi::{register_functions, register_on_every_new_connection};
