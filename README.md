@@ -11,7 +11,17 @@
 
 ## Quick start (Diesel)
 
+A bare dependency is geometry only. The Diesel layer needs the `diesel-sqlite` feature (or `diesel-postgres`), and in-process registration alone needs `sqlite`.
+
+```sh
+cargo add sqlitegis --features diesel-sqlite
+```
+
 ```rust
+# #[cfg(not(feature = "diesel-sqlite"))]
+# fn main() {}
+# #[cfg(feature = "diesel-sqlite")]
+# fn main() {
 use diesel::prelude::*;
 use sqlitegis::diesel::functions::st_point;
 use sqlitegis::diesel::prelude::*;
@@ -30,6 +40,7 @@ let mut conn = SqliteConnection::establish(":memory:").unwrap();
 let nearby = features::table
     .filter(features::geom.st_dwithin(st_point(13.4, 52.5).nullable(), 1000.0).eq(true))
     .select(features::geom.st_astext());
+# }
 ```
 
 `CreateSpatialIndex` and `DropSpatialIndex` are DDL helpers without typed wrappers, called through `diesel::sql_query`. [R-tree](https://en.wikipedia.org/wiki/R-tree)-backed queries run 50 to 60x faster than the non-indexed equivalents (see Benchmarks).

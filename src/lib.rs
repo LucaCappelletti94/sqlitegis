@@ -10,21 +10,20 @@
 //! ask for. See the `[features]` table in Cargo.toml for the full list.
 //! In short:
 //!
-//! - `core` is always available (pure-Rust geometry, EWKB I/O, function
-//!   catalog, no SQLite or Diesel deps).
-//! - `sqlite` adds [`crate::sqlite::register_functions`] for in-process
+//! - `core` is always available and is all a bare dependency gets
+//!   (pure-Rust geometry, EWKB I/O, function catalog, no SQLite or
+//!   Diesel deps).
+//! - `sqlite` adds `sqlite::register_functions` for in-process
 //!   registration against a `*mut sqlite3` connection.
 //! - `sqlite-extension` further adds the `#[no_mangle]` C entry points so
 //!   the cdylib build is loadable via SQLite's `load_extension`.
-//! - `diesel` adds backend-agnostic types
-//!   ([`Geometry`](crate::diesel::Geometry),
-//!   [`Geography`](crate::diesel::Geography)) plus
-//!   [`GeometryExpressionMethods`](crate::diesel::GeometryExpressionMethods).
+//! - `diesel` adds backend-agnostic types (`diesel::Geometry`,
+//!   `diesel::Geography`) plus `diesel::GeometryExpressionMethods`.
 //! - `diesel-sqlite` / `diesel-postgres` add the backend-specific impls.
 //!
 //! Diesel users typically import via the prelude:
 //! `use sqlitegis::prelude::*;` (re-exported from
-//! [`crate::diesel::prelude`]).
+//! `diesel::prelude`).
 
 pub mod core;
 #[doc(inline)]

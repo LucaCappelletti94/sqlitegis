@@ -35,8 +35,8 @@ hooks = [
       pass_filenames = false },
 
     { id = "cargo-test",
-      name = "cargo test (workspace)",
-      entry = "cargo test --workspace",
+      name = "cargo test (workspace, diesel-sqlite)",
+      entry = "cargo test --workspace --features diesel-sqlite",
       language = "system",
       types = ["rust"],
       pass_filenames = false },
@@ -49,8 +49,8 @@ hooks = [
       pass_filenames = false },
 
     { id = "cargo-test-doc",
-      name = "cargo test --doc (workspace)",
-      entry = "cargo test --doc --workspace",
+      name = "cargo test --doc (workspace, all-features)",
+      entry = "cargo test --doc --workspace --all-features",
       language = "system",
       types = ["rust"],
       pass_filenames = false },
