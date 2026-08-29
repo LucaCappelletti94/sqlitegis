@@ -23,10 +23,11 @@ name = "sqlitegis"
 crate-type = ["lib", "cdylib"]
 
 [features]
-# Pure-Rust geometry plus Diesel + SQLite is the most common usage and matches
-# diesel's own default-features convention. Pass --no-default-features to drop
-# everything except the EWKB/geometry core.
-default = ["diesel-sqlite"]
+# Nothing is on by default: a bare dependency is the pure-Rust geometry and
+# EWKB core, with no SQLite linkage and no Diesel. Add `sqlite` for
+# in-process registration, or `diesel-sqlite` / `diesel-postgres` for the
+# ORM types.
+default = []
 
 # In-process SQLite registration API. Pulls libsqlite3-sys on native targets
 # and sqlite-wasm-rs on wasm32. Does NOT export the C entry-point symbols --

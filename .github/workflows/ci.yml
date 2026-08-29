@@ -55,16 +55,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Default features -- the most common consumer build.
+          # Default features, which are now the pure-Rust core -- catches
+          # accidental dep leaks into core.
           - target: workspace
             cmd: cargo clippy --workspace --all-targets -- -D warnings
-          # Union: every feature on. Covers sqlite, sqlite-extension, and
-          # diesel-sqlite implicitly, so they don't need their own entries.
+          # Union: every feature on, including sqlite-extension.
           - target: workspace-all-features
             cmd: cargo clippy --workspace --all-features --all-targets -- -D warnings
-          # Pure-Rust core only -- catches accidental dep leaks into core.
-          - target: no-default-features
-            cmd: cargo clippy -p sqlitegis --no-default-features --all-targets -- -D warnings
+          # The Diesel + SQLite build, the most common consumer build.
+          - target: diesel-sqlite
+            cmd: cargo clippy -p sqlitegis --features diesel-sqlite --all-targets -- -D warnings
           # Diesel without a backend -- feature-interaction check the
           # all-features run cannot catch (it always has sqlite on too).
           - target: diesel-only
@@ -102,14 +102,16 @@ jobs:
       matrix:
         include:
           - target: workspace
-            cmd: cargo test --workspace
-          # Default features omit sqlite-extension, so the one
+            cmd: cargo test --workspace --features diesel-sqlite
+          # The Diesel + SQLite job omits sqlite-extension, so the one
           # load_extension-gated test in sqlite_integration.rs would not run
-          # under the workspace job. Run that file alone with the feature on.
+          # under it. Run that file alone with the feature on.
           - target: sqlite-extension
             cmd: cargo test -p sqlitegis --features sqlite-extension --test sqlite_integration
+          # All features on so the Diesel example in the README, which the
+          # crate root includes, is compiled and run rather than skipped.
           - target: doctest-workspace
-            cmd: cargo test --doc --workspace
+            cmd: cargo test --doc --workspace --all-features
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -336,7 +338,7 @@ jobs:
           echo "AR_aarch64_linux_android=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
 
       - name: Check mobile build
-        run: cargo check -p sqlitegis --lib --features bundled-sqlite --target ${{ matrix.target }}
+        run: cargo check -p sqlitegis --lib --features diesel-sqlite,bundled-sqlite --target ${{ matrix.target }}
 
   # Boot a real iOS simulator via xcrun simctl and run the sqlitegis test
   # suite through it as the cargo test runner. Catches runtime regressions
@@ -355,7 +357,7 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
       - name: Check iOS device target build
-        run: cargo check -p sqlitegis --features bundled-sqlite --target aarch64-apple-ios
+        run: cargo check -p sqlitegis --features diesel-sqlite,bundled-sqlite --target aarch64-apple-ios
       - name: Boot iOS simulator
         run: |
           RUNTIME_JSON="$(xcrun simctl list runtimes --json \
@@ -387,7 +389,7 @@ jobs:
           xcrun simctl boot "$SIM_UDID"
           xcrun simctl bootstatus "$SIM_UDID" -b
       - name: Run iOS simulator tests
-        run: cargo test -p sqlitegis --features bundled-sqlite --target aarch64-apple-ios-sim --locked
+        run: cargo test -p sqlitegis --features diesel-sqlite,bundled-sqlite --target aarch64-apple-ios-sim --locked
         env:
           CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER: >-
             xcrun simctl spawn ${{ env.SIMULATOR_UDID }}
@@ -438,7 +440,7 @@ jobs:
           target: default
           profile: pixel_6
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          script: cargo ndk-test -t x86_64 -p sqlitegis --features bundled-sqlite --lib --locked
+          script: cargo ndk-test -t x86_64 -p sqlitegis --features diesel-sqlite,bundled-sqlite --lib --locked
 
   # Native runtime tests on ARM64 Linux. Covers the case where sqlitegis
   # is embedded in a server or workstation running aarch64 Linux (Graviton,
@@ -454,7 +456,7 @@ jobs:
       - name: Verify host architecture
         run: rustc -vV
       - name: Run tests
-        run: cargo test -p sqlitegis --verbose --locked
+        run: cargo test -p sqlitegis --features diesel-sqlite --verbose --locked
 
   # Cross link-check for aarch64 musl, the typical edge/container target
   # (Alpine, distroless images). cargo-cross handles the sysroot so we do
@@ -478,7 +480,7 @@ jobs:
           cross test \
             --target aarch64-unknown-linux-musl \
             -p sqlitegis \
-            --features bundled-sqlite \
+            --features diesel-sqlite,bundled-sqlite \
             --no-run \
             --locked
 
@@ -507,7 +509,7 @@ jobs:
             gcc-arm-linux-gnueabihf \
             libc6-dev-armhf-cross
       - name: ARMv7 test build (no-run)
-        run: cargo test -p sqlitegis --features bundled-sqlite --target armv7-unknown-linux-gnueabihf --no-run --locked
+        run: cargo test -p sqlitegis --features diesel-sqlite,bundled-sqlite --target armv7-unknown-linux-gnueabihf --no-run --locked
         env:
           CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
           CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
@@ -527,7 +529,7 @@ jobs:
           targets: aarch64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - name: Test build (no-run)
-        run: cargo test -p sqlitegis --features bundled-sqlite --target aarch64-pc-windows-msvc --no-run --locked
+        run: cargo test -p sqlitegis --features diesel-sqlite,bundled-sqlite --target aarch64-pc-windows-msvc --no-run --locked
 
   coverage:
     name: Coverage
