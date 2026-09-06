@@ -25,9 +25,9 @@ jobs:
     env:
       RUST_TEST_THREADS: 1
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: sqlite intersects window perf
         run: cargo test -p sqlitegis --features sqlite spatial_index_accelerates_intersects_window -- --ignored --exact --nocapture --test-threads=1

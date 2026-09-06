@@ -29,25 +29,25 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy-1.outputs.page_url || steps.deploy-2.outputs.page_url || steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: |
             .
             examples/web-demo
 
       - name: Install dioxus-cli
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
         with:
           tool: dioxus-cli
 
       - name: Install wasm-bindgen-cli
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
         with:
           tool: wasm-bindgen-cli
 
@@ -73,7 +73,7 @@ jobs:
           echo "sqlitegis.luca.phd" > _site/CNAME
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: _site
 
@@ -85,7 +85,7 @@ jobs:
       # fail the job.
       - name: Deploy to GitHub Pages
         id: deploy-1
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
         continue-on-error: true
 
       - name: Wait before retrying (attempt 2)
@@ -95,7 +95,7 @@ jobs:
       - name: Deploy to GitHub Pages (retry 2)
         id: deploy-2
         if: steps.deploy-1.outcome == 'failure'
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
         continue-on-error: true
 
       - name: Wait before retrying (attempt 3)
@@ -105,4 +105,4 @@ jobs:
       - name: Deploy to GitHub Pages (retry 3)
         id: deployment
         if: steps.deploy-1.outcome == 'failure' && steps.deploy-2.outcome == 'failure'
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
