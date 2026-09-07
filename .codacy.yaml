@@ -2,11 +2,8 @@
 exclude_paths:
   - "benches/**"
   - "fuzz/**"
-# Excluded from duplication and complexity only, so Opengrep and Trivy still scan tests.
+# Tests duplicate by design; every other tool and metric still covers them.
 engines:
   duplication:
-    exclude_paths:
-      - "tests/**"
-  metric:
     exclude_paths:
       - "tests/**"
