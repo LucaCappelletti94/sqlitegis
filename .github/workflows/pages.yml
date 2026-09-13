@@ -42,12 +42,12 @@ jobs:
             examples/web-demo
 
       - name: Install dioxus-cli
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
+        uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2
         with:
           tool: dioxus-cli
 
       - name: Install wasm-bindgen-cli
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
+        uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2
         with:
           tool: wasm-bindgen-cli
 
