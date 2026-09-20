@@ -159,7 +159,7 @@ jobs:
       # Pin to the wasm-bindgen version recorded in Cargo.lock so the CLI
       # and the .wasm file schema versions match. taiki-e/install-action
       # defaults to latest, which periodically drifts ahead of our lock.
-      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
+      - uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
         with:
           tool: wasm-bindgen-cli@0.2.121
       - run: cargo test -p sqlitegis --features sqlite --target wasm32-unknown-unknown --test sqlite_wasm
@@ -180,7 +180,7 @@ jobs:
       # Pin to the wasm-bindgen version recorded in Cargo.lock so the CLI
       # and the .wasm file schema versions match. taiki-e/install-action
       # defaults to latest, which periodically drifts ahead of our lock.
-      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
+      - uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
         with:
           tool: wasm-bindgen-cli@0.2.121
       - run: cargo test -p sqlitegis --features diesel-sqlite --target wasm32-unknown-unknown --test diesel_wasm_integration
@@ -422,7 +422,7 @@ jobs:
         with:
           ndk-version: r27c
       - name: Install cargo-ndk
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
         with:
           tool: cargo-ndk
       - name: Enable KVM group perms
@@ -472,7 +472,7 @@ jobs:
           targets: aarch64-unknown-linux-musl
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Install cross
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
         with:
           tool: cross
       - name: Cross test build (no-run, musl)
@@ -545,7 +545,7 @@ jobs:
       - run: cargo llvm-cov --workspace --lcov --output-path lcov.info
       - run: cargo llvm-cov --no-clean -p sqlitegis --features diesel-sqlite --lcov --output-path lcov-diesel.info
       - run: cargo llvm-cov --no-clean -p sqlitegis --features diesel-postgres --test diesel_postgres_integration --lcov --output-path lcov-postgres.info
-      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           use_oidc: true
           files: lcov.info,lcov-diesel.info,lcov-postgres.info
