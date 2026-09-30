@@ -14,6 +14,13 @@ fi
 target_dir=fuzz/target/x86_64-unknown-linux-gnu/release
 for name in $targets; do
     cp "$target_dir/$name" "$OUT/"
+    # the runner unpacks <target>_seed_corpus.zip as the starting corpus
+    seeds="fuzz/seeds/$name"
+    if [[ ! -d "$seeds" ]] || [[ -z "$(ls -A "$seeds")" ]]; then
+        echo "fuzz target $name has no seeds in $seeds" >&2
+        exit 1
+    fi
+    zip -qj "$OUT/${name}_seed_corpus.zip" "$seeds"/*
 done
 
 # the runner image has no GEOS, so the differential target ships its own copy;
