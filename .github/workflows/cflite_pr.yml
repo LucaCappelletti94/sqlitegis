@@ -37,4 +37,4 @@ jobs:
           sanitizer: ${{ matrix.sanitizer }}
           # Starts from the batch corpus. Reading needs no token, so fork PRs work too.
           storage-repo: https://github.com/${{ github.repository }}.git
-          storage-repo-branch: clusterfuzzlite
+          storage-repo-branch: fuzz-corpus

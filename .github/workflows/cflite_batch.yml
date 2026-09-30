@@ -35,4 +35,4 @@ jobs:
           mode: batch
           sanitizer: ${{ matrix.sanitizer }}
           storage-repo: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-          storage-repo-branch: clusterfuzzlite
+          storage-repo-branch: fuzz-corpus
