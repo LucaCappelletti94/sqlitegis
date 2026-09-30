@@ -42,11 +42,9 @@ fi
 
 run_target() {
     local target="$1"
-    # cargo-fuzz is invoked from the repo root. It discovers the fuzz/
-    # subcrate automatically. `cd` first so the command works regardless
-    # of where the user launched the script.
-    printf 'cd %q && cargo +nightly fuzz run %q -- %s; read -r -p '\''Press enter to close...'\''' \
-        "$ROOT_DIR" "$target" "${LIBFUZZER_ARGS[*]}"
+    # libFuzzer writes new inputs only into the first corpus dir, so fuzz/seeds stays untouched
+    printf 'cd %q && mkdir -p fuzz/corpus/%q && cargo +nightly fuzz run %q fuzz/corpus/%q fuzz/seeds/%q -- %s; read -r -p '\''Press enter to close...'\''' \
+        "$ROOT_DIR" "$target" "$target" "$target" "$target" "${LIBFUZZER_ARGS[*]}"
 }
 
 # Create session with the first target.
