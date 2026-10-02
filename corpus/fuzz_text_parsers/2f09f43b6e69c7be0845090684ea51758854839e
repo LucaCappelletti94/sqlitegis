@@ -1,0 +1,1 @@
+{"type": "GeometryCollection", "geometries": [{"type": "Point", "coordinates": [0,0]},{"type": "MultiPoint", "coordinates": [[0,0],[1,1]]},{"type": "Polygon", "coordinates": [[[0,0]]]},{"type": "MultiPoint", "coordinates": [[1,1]]},{"type": "ygon", "coordinates": [[[[0,0]]]]}]}
