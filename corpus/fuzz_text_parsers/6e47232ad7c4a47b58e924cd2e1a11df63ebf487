@@ -1,1 +1,0 @@
-{"type": "GeometryCollection", "geometries": [{"type": "Point", "coordinates": [1,2]},{"type": "LineString", "coordinates": [[0,0],[1,1]]},{"type": "Pklygon", "coordinates": [[[0,0],[0,1],[1],[1,0],[0,0]]]}]}
