@@ -158,7 +158,7 @@ jobs:
       # Pin to the wasm-bindgen version recorded in Cargo.lock so the CLI
       # and the .wasm file schema versions match. taiki-e/install-action
       # defaults to latest, which periodically drifts ahead of our lock.
-      - uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: wasm-bindgen-cli@0.2.121
       - run: cargo test -p sqlitegis --features sqlite --target wasm32-unknown-unknown --test sqlite_wasm
@@ -179,7 +179,7 @@ jobs:
       # Pin to the wasm-bindgen version recorded in Cargo.lock so the CLI
       # and the .wasm file schema versions match. taiki-e/install-action
       # defaults to latest, which periodically drifts ahead of our lock.
-      - uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: wasm-bindgen-cli@0.2.121
       - run: cargo test -p sqlitegis --features diesel-sqlite --target wasm32-unknown-unknown --test diesel_wasm_integration
@@ -421,7 +421,7 @@ jobs:
         with:
           ndk-version: r27c
       - name: Install cargo-ndk
-        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-ndk
       - name: Enable KVM group perms
@@ -471,7 +471,7 @@ jobs:
           targets: aarch64-unknown-linux-musl
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Install cross
-        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cross
       - name: Cross test build (no-run, musl)
