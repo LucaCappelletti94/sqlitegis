@@ -43,7 +43,7 @@ let nearby = features::table
 # }
 ```
 
-`CreateSpatialIndex` and `DropSpatialIndex` are DDL helpers without typed wrappers, called through `diesel::sql_query`. [R-tree](https://en.wikipedia.org/wiki/R-tree)-backed queries run 50 to 60x faster than the non-indexed equivalents (see Benchmarks).
+`CreateSpatialIndex` and `DropSpatialIndex` are DDL helpers without typed wrappers, called through `diesel::sql_query`. An index lives in its table's schema, named explicitly as in `CreateSpatialIndex('temp', 'pts', 'geom')` or found temp first like any unqualified name. [R-tree](https://en.wikipedia.org/wiki/R-tree)-backed queries run 50 to 60x faster than the non-indexed equivalents (see Benchmarks).
 
 ## Without Diesel: pure-Rust geometry
 

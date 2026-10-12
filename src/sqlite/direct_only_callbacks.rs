@@ -5,5 +5,7 @@
 
 const SQLITE_DIRECT_ONLY_CALLBACKS: &[SqliteCallbackSpec] = &[
     callback_spec!("CreateSpatialIndex", 2, create_spatial_index_xfunc),
+    callback_spec!("CreateSpatialIndex", 3, create_spatial_index_xfunc),
     callback_spec!("DropSpatialIndex", 2, drop_spatial_index_xfunc),
+    callback_spec!("DropSpatialIndex", 3, drop_spatial_index_xfunc),
 ];
