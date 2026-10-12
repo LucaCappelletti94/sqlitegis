@@ -3001,6 +3001,22 @@ fn spatial_index_rejects_unusable_owner_schema() {
         .expect_err("a bare name matching no table must be rejected");
     assert!(err.contains("no such table [missing]"), "unexpected error: {err}");
 
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex('temp', 'missing', 'geom')")
+        .expect_err("a named schema without the table must be rejected");
+    assert!(
+        err.contains("no such table [temp].[missing]"),
+        "unexpected error: {err}"
+    );
+
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex(CAST(X'FF' AS TEXT), 'features', 'geom')")
+        .expect_err("a schema name that is not UTF-8 must be rejected");
+    assert!(
+        err.contains("schema name must be valid UTF-8 text"),
+        "unexpected error: {err}"
+    );
+
     db.exec("DROP TABLE temp.features");
     db.exec("CREATE TEMP VIEW features AS SELECT 1 AS id, NULL AS geom");
     let err = db
@@ -3016,6 +3032,50 @@ fn spatial_index_rejects_unusable_owner_schema() {
     let rc = db.query_i64("SELECT DropSpatialIndex('temp', 'features', 'geom')");
     assert_eq!(rc, 1, "dropping an absent index is a no-op");
     assert!(!catalog_exists(&db, "temp"), "drop must not create a catalogue");
+}
+
+#[$test_attr]
+fn spatial_index_rejects_plain_table_with_rtree_name() {
+    let db = ActiveTestDb::open();
+    db.exec("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)");
+    db.exec("CREATE TABLE pts_geom_rtree (id INTEGER PRIMARY KEY)");
+
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex('pts', 'geom')")
+        .expect_err("a plain table squatting the R-tree name must not be adopted");
+    assert!(
+        err.contains(
+            "existing table [main].[pts_geom_rtree] is not an R-tree index managed by SQLiteGIS"
+        ),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        db.query_i64("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'"),
+        0
+    );
+}
+
+#[$test_attr]
+fn spatial_index_rejects_catalog_row_without_column() {
+    let db = ActiveTestDb::open();
+    db.exec("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)");
+    db.exec(
+        "CREATE TABLE sqlitegis_spatial_index_catalog \
+         (prefix TEXT PRIMARY KEY, table_name TEXT, column_name TEXT)",
+    );
+    db.exec("INSERT INTO sqlitegis_spatial_index_catalog VALUES ('pts_geom', 'pts', NULL)");
+
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex('pts', 'geom')")
+        .expect_err("an incomplete catalogue row must not be read as ownership");
+    assert!(
+        err.contains("catalog row for prefix [pts_geom] is missing column_name"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        db.query_i64("SELECT COUNT(*) FROM sqlite_master WHERE name GLOB 'pts_geom_*'"),
+        0
+    );
 }
 
 #[$test_attr]

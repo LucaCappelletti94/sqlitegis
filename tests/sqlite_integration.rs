@@ -298,3 +298,63 @@ fn candidate_library_names() -> &'static [&'static str] {
         &["libsqlitegis.so"]
     }
 }
+
+/// Authorizer that rejects `PRAGMA database_list` and allows everything else.
+unsafe extern "C" fn deny_database_list(
+    _user_data: *mut std::os::raw::c_void,
+    action: std::os::raw::c_int,
+    pragma: *const std::os::raw::c_char,
+    _arg: *const std::os::raw::c_char,
+    _schema: *const std::os::raw::c_char,
+    _trigger: *const std::os::raw::c_char,
+) -> std::os::raw::c_int {
+    let denied = action == SQLITE_PRAGMA
+        && !pragma.is_null()
+        && unsafe { CStr::from_ptr(pragma) }
+            .to_bytes()
+            .eq_ignore_ascii_case(b"database_list");
+    if denied {
+        SQLITE_DENY
+    } else {
+        SQLITE_OK
+    }
+}
+
+/// A schema lookup SQLite refuses fails the call instead of falling back to
+/// some default schema, and leaves no index objects behind.
+#[test]
+fn spatial_index_reports_failed_schema_lookup() {
+    let db = TestDb::open();
+    db.exec("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)");
+    unsafe {
+        assert_eq!(
+            sqlite3_set_authorizer(db.0, Some(deny_database_list), ptr::null_mut()),
+            SQLITE_OK
+        );
+    }
+
+    for sql in [
+        "SELECT CreateSpatialIndex('pts', 'geom')",
+        "SELECT CreateSpatialIndex('main', 'pts', 'geom')",
+        "SELECT DropSpatialIndex('pts', 'geom')",
+    ] {
+        let err = db
+            .try_query_i64(sql)
+            .expect_err("a refused schema lookup must fail the call");
+        assert!(
+            err.contains("not authorized"),
+            "{sql}: unexpected error: {err}"
+        );
+    }
+
+    unsafe {
+        assert_eq!(
+            sqlite3_set_authorizer(db.0, None, ptr::null_mut()),
+            SQLITE_OK
+        );
+    }
+    assert_eq!(
+        db.query_i64("SELECT COUNT(*) FROM sqlite_master WHERE name GLOB 'pts_geom_*'"),
+        0
+    );
+}
