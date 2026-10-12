@@ -1155,57 +1155,44 @@ fn sql_to_cstring(sql: &str) -> std::result::Result<CString, std::ffi::NulError>
     CString::new(sql)
 }
 
-unsafe fn exec_sql_inner(db: *mut sqlite3, sql: &str, ctx: Option<*mut sqlite3_context>) -> c_int {
+/// Runs `sql` via `sqlite3_exec`, returning SQLite's error message on failure.
+unsafe fn exec_sql(db: *mut sqlite3, sql: &str) -> std::result::Result<(), String> {
     unsafe {
-        let c_sql = match sql_to_cstring(sql) {
-            Ok(v) => v,
-            Err(_) => {
-                if let Some(ctx) = ctx {
-                    set_error(ctx, "internal error: generated SQL contains NUL byte");
-                }
-                return SQLITE_ERROR;
-            }
-        };
-
+        let c_sql = sql_to_cstring(sql)
+            .map_err(|_| "internal error: generated SQL contains NUL byte".to_string())?;
         let mut err_msg: *mut std::ffi::c_char = std::ptr::null_mut();
         let rc = host_api::exec(db, c_sql.as_ptr(), None, std::ptr::null_mut(), &mut err_msg);
-
-        if rc != SQLITE_OK {
-            if let Some(ctx) = ctx {
-                if err_msg.is_null() {
-                    set_error(ctx, "exec_sql failed");
-                } else {
-                    let msg = CStr::from_ptr(err_msg).to_string_lossy();
-                    set_error(ctx, &msg);
-                }
-            }
-        }
-
-        if !err_msg.is_null() {
+        let message = (!err_msg.is_null()).then(|| {
+            let message = CStr::from_ptr(err_msg).to_string_lossy().into_owned();
             host_api::free(err_msg.cast());
+            message
+        });
+        if rc == SQLITE_OK {
+            return Ok(());
         }
-        rc
+        Err(message.unwrap_or_else(|| "exec_sql failed".to_owned()))
     }
 }
 
-/// Run SQL via `sqlite3_exec`, returning `SQLITE_OK` on success.
-/// On failure, sets `sqlite3_result_error` on `ctx` with the error message
-/// from SQLite and frees it via `sqlite3_free`.
-unsafe fn exec_sql(db: *mut sqlite3, ctx: *mut sqlite3_context, sql: &str) -> c_int {
-    unsafe { exec_sql_inner(db, sql, Some(ctx)) }
-}
-
-/// Run SQL via `sqlite3_exec` but never touch sqlite3_result_error.
-/// Used for best-effort rollback paths where the original error should win.
-unsafe fn exec_sql_silent(db: *mut sqlite3, sql: &str) -> c_int {
-    unsafe { exec_sql_inner(db, sql, None) }
-}
-
-unsafe fn rollback_savepoint(db: *mut sqlite3, ctx: *mut sqlite3_context, savepoint: &str) {
+/// Runs `body` inside `savepoint`, rolling every change back when it fails.
+unsafe fn run_in_savepoint<T>(
+    db: *mut sqlite3,
+    savepoint: &str,
+    body: impl FnOnce() -> std::result::Result<T, SpatialIndexError>,
+) -> std::result::Result<T, SpatialIndexError> {
     unsafe {
-        let _ = ctx;
-        let _ = exec_sql_silent(db, &format!("ROLLBACK TO {savepoint}"));
-        let _ = exec_sql_silent(db, &format!("RELEASE {savepoint}"));
+        exec_sql(db, &format!("SAVEPOINT {savepoint}"))?;
+        match body() {
+            Ok(value) => {
+                exec_sql(db, &format!("RELEASE {savepoint}"))?;
+                Ok(value)
+            }
+            Err(e) => {
+                let _ = exec_sql(db, &format!("ROLLBACK TO {savepoint}"));
+                let _ = exec_sql(db, &format!("RELEASE {savepoint}"));
+                Err(e)
+            }
+        }
     }
 }
 
@@ -1248,6 +1235,7 @@ unsafe fn sqlite_master_lookup_text(
 
 const SPATIAL_INDEX_CATALOG_TABLE: &str = "sqlitegis_spatial_index_catalog";
 const SPATIAL_INDEX_CATALOG_REQUIRED_COLUMNS: [&str; 3] = ["prefix", "table_name", "column_name"];
+const SPATIAL_INDEX_TRIGGER_SUFFIXES: [&str; 3] = ["_insert", "_update", "_delete"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SpatialIndexOwnership {
@@ -1255,22 +1243,95 @@ enum SpatialIndexOwnership {
     Absent,
 }
 
-unsafe fn lookup_sqlite_master_object_type(
-    db: *mut sqlite3,
-    object_name: &str,
-) -> std::result::Result<Option<String>, String> {
-    unsafe {
-        let sql = format!("SELECT type FROM sqlite_master WHERE name = '{object_name}' LIMIT 1");
-        sqlite_master_lookup_text(db, &sql)
+/// Why a `CreateSpatialIndex` or `DropSpatialIndex` call failed.
+#[derive(Debug, thiserror::Error)]
+enum SpatialIndexError {
+    #[error("unknown schema [{0}]")]
+    UnknownSchema(String),
+    #[error("no such table [{0}]")]
+    NoSuchTable(String),
+    #[error("no such table [{schema}].[{table}]")]
+    NoSuchQualifiedTable { schema: String, table: String },
+    #[error("[{schema}].[{table}] is not a table (found {object_type})")]
+    NotATable {
+        schema: String,
+        table: String,
+        object_type: String,
+    },
+    #[error(
+        "table [{schema}].[{table}] has no rowid column. WITHOUT ROWID tables are not \
+         supported. Recreate the table without the WITHOUT ROWID clause."
+    )]
+    WithoutRowid { schema: String, table: String },
+    #[error(
+        "invalid spatial index catalog object type for [{schema}].[{catalog}] \
+         (expected table, found [{object_type}])",
+        catalog = SPATIAL_INDEX_CATALOG_TABLE
+    )]
+    CatalogNotATable { schema: String, object_type: String },
+    #[error(
+        "invalid spatial index catalog schema for [{schema}].[{catalog}] \
+         (missing required column [{column}])",
+        catalog = SPATIAL_INDEX_CATALOG_TABLE
+    )]
+    CatalogMissingColumn {
+        schema: String,
+        column: &'static str,
+    },
+    #[error("catalog row for prefix [{0}] is missing column_name")]
+    CatalogRowIncomplete(String),
+    #[error("unexpected sqlite_master entry for [{schema}].[{name}] (type [{object_type}]); expected table")]
+    RtreeNotATable {
+        schema: String,
+        name: String,
+        object_type: String,
+    },
+    #[error(
+        "existing table [{schema}].[{name}] is not an R-tree index managed by SQLiteGIS \
+         (missing shadow table [{shadow}])"
+    )]
+    RtreeMissingShadow {
+        schema: String,
+        name: String,
+        shadow: String,
+    },
+    #[error("naming collision for trigger [{schema}].[{trigger}] between tables [{owner}] and [{table}]")]
+    TriggerCollision {
+        schema: String,
+        trigger: String,
+        owner: String,
+        table: String,
+    },
+    #[error("naming collision for managed prefix [{schema}].[{prefix}] between [{owner}] and [{requested}]")]
+    PrefixCollision {
+        schema: String,
+        prefix: String,
+        owner: String,
+        requested: String,
+    },
+    #[error(
+        "cannot prove ownership for [{schema}].[{prefix}] because managed objects exist \
+         without an ownership marker"
+    )]
+    UnmarkedObjects { schema: String, prefix: String },
+    #[error("{0}")]
+    Sqlite(String),
+}
+
+impl From<String> for SpatialIndexError {
+    fn from(message: String) -> Self {
+        Self::Sqlite(message)
     }
 }
 
-unsafe fn inspect_spatial_index_catalog_columns(
+/// Reads column `column` of every row `sql` returns, skipping NULLs.
+unsafe fn query_text_column(
     db: *mut sqlite3,
-) -> std::result::Result<(bool, bool, bool), String> {
+    sql: &str,
+    column: c_int,
+) -> std::result::Result<Vec<String>, String> {
     unsafe {
-        let sql = format!("PRAGMA table_info([{SPATIAL_INDEX_CATALOG_TABLE}])");
-        let c_sql = sql_to_cstring(&sql)
+        let c_sql = sql_to_cstring(sql)
             .map_err(|_| "internal error: generated SQL contains NUL byte".to_string())?;
         let mut stmt: *mut sqlite3_stmt = std::ptr::null_mut();
         let rc = host_api::prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut());
@@ -1280,24 +1341,14 @@ unsafe fn inspect_spatial_index_catalog_columns(
                 .into_owned());
         }
 
-        let mut has_prefix = false;
-        let mut has_table_name = false;
-        let mut has_column_name = false;
-
+        let mut values = Vec::new();
         loop {
             let step = host_api::step(stmt);
             if step == SQLITE_ROW {
-                if host_api::column_type(stmt, 1) != SQLITE_NULL {
-                    let ptr = host_api::column_text(stmt, 1);
-                    if !ptr.is_null() {
-                        let column_name = CStr::from_ptr(ptr.cast()).to_string_lossy();
-                        match column_name.as_ref() {
-                            "prefix" => has_prefix = true,
-                            "table_name" => has_table_name = true,
-                            "column_name" => has_column_name = true,
-                            _ => {}
-                        }
-                    }
+                // `sqlite3_column_text` returns a null pointer for SQL NULL.
+                let ptr = host_api::column_text(stmt, column);
+                if !ptr.is_null() {
+                    values.push(CStr::from_ptr(ptr.cast()).to_string_lossy().into_owned());
                 }
                 continue;
             }
@@ -1312,485 +1363,381 @@ unsafe fn inspect_spatial_index_catalog_columns(
         }
 
         let _ = host_api::finalize(stmt);
-        Ok((has_prefix, has_table_name, has_column_name))
+        Ok(values)
     }
 }
 
-unsafe fn validate_spatial_index_catalog_shape(
-    db: *mut sqlite3,
-    ctx: *mut sqlite3_context,
-    label: &str,
-) -> bool {
+/// Schemas in the order SQLite searches them for an unqualified name: temp,
+/// main, then attached schemas in attach order.
+unsafe fn schema_search_order(db: *mut sqlite3) -> std::result::Result<Vec<String>, String> {
     unsafe {
-        let object_type = match lookup_sqlite_master_object_type(db, SPATIAL_INDEX_CATALOG_TABLE) {
-            Ok(v) => v,
-            Err(e) => {
-                set_error(
-                    ctx,
-                    &format!("{label}: failed to inspect spatial index catalog metadata: {e}"),
-                );
-                return false;
-            }
-        };
-        let Some(object_type) = object_type else {
-            set_error(
-                ctx,
-                &format!(
-                    "{label}: failed to inspect spatial index catalog metadata: \
-                 missing sqlite_master entry for [{SPATIAL_INDEX_CATALOG_TABLE}]"
-                ),
-            );
-            return false;
-        };
-        if object_type != "table" {
-            set_error(
-                ctx,
-                &format!(
-                    "{label}: invalid spatial index catalog object type for \
-                 [{SPATIAL_INDEX_CATALOG_TABLE}] (expected table, found [{object_type}])"
-                ),
-            );
-            return false;
-        }
-
-        let (has_prefix, has_table_name, has_column_name) =
-            match inspect_spatial_index_catalog_columns(db) {
-                Ok(v) => v,
-                Err(e) => {
-                    set_error(
-                        ctx,
-                        &format!("{label}: failed to inspect spatial index catalog metadata: {e}"),
-                    );
-                    return false;
-                }
-            };
-
-        let present = [has_prefix, has_table_name, has_column_name];
-        for (i, required_column) in SPATIAL_INDEX_CATALOG_REQUIRED_COLUMNS.iter().enumerate() {
-            if !present[i] {
-                set_error(
-                    ctx,
-                    &format!(
-                        "{label}: invalid spatial index catalog schema for \
-                     [{SPATIAL_INDEX_CATALOG_TABLE}] (missing required column [{required_column}])"
-                    ),
-                );
-                return false;
-            }
-        }
-
-        true
+        let attached = query_text_column(db, "PRAGMA database_list", 1)?;
+        let mut order = vec!["temp".to_owned(), "main".to_owned()];
+        order.extend(
+            attached
+                .into_iter()
+                .filter(|name| name != "main" && name != "temp"),
+        );
+        Ok(order)
     }
 }
 
-unsafe fn ensure_spatial_index_catalog_table(
+/// Returns the attached spelling of `schema`, which SQLite matches
+/// case-insensitively.
+unsafe fn canonical_schema(
     db: *mut sqlite3,
-    ctx: *mut sqlite3_context,
-    label: &str,
-) -> bool {
+    schema: &str,
+) -> std::result::Result<String, SpatialIndexError> {
     unsafe {
-        let object_type = match lookup_sqlite_master_object_type(db, SPATIAL_INDEX_CATALOG_TABLE) {
-            Ok(v) => v,
-            Err(e) => {
-                set_error(
-                    ctx,
-                    &format!("{label}: failed to inspect spatial index catalog metadata: {e}"),
-                );
-                return false;
-            }
-        };
-        if let Some(object_type) = object_type {
-            if object_type != "table" {
-                set_error(
-                    ctx,
-                    &format!(
-                        "{label}: invalid spatial index catalog object type for \
-                     [{SPATIAL_INDEX_CATALOG_TABLE}] (expected table, found [{object_type}])"
-                    ),
-                );
-                return false;
-            }
-        }
+        schema_search_order(db)?
+            .into_iter()
+            .find(|name| name.eq_ignore_ascii_case(schema))
+            .ok_or_else(|| SpatialIndexError::UnknownSchema(schema.to_owned()))
+    }
+}
 
+/// Whether `schema` holds a table named `table`. A view of that name is an
+/// error, so a bare name never skips past the relation SQLite would read.
+unsafe fn schema_holds_table(
+    db: *mut sqlite3,
+    schema: &str,
+    table: &str,
+) -> std::result::Result<bool, SpatialIndexError> {
+    unsafe {
         let sql = format!(
-            "CREATE TABLE IF NOT EXISTS [{SPATIAL_INDEX_CATALOG_TABLE}] (\
-         prefix TEXT PRIMARY KEY, \
-         table_name TEXT NOT NULL, \
-         column_name TEXT NOT NULL, \
-         UNIQUE(table_name, column_name)\
-         )"
+            "SELECT type FROM [{schema}].sqlite_master \
+             WHERE type IN ('table', 'view') AND name = '{table}' COLLATE NOCASE LIMIT 1"
         );
-        if exec_sql_silent(db, &sql) == SQLITE_OK {
-            return true;
+        match sqlite_master_lookup_text(db, &sql)? {
+            None => Ok(false),
+            Some(object_type) if object_type == "table" => Ok(true),
+            Some(object_type) => Err(SpatialIndexError::NotATable {
+                schema: schema.to_owned(),
+                table: table.to_owned(),
+                object_type,
+            }),
         }
-
-        let err = CStr::from_ptr(host_api::errmsg(db))
-            .to_string_lossy()
-            .into_owned();
-        set_error(
-            ctx,
-            &format!("{label}: failed to ensure spatial index catalog: {err}"),
-        );
-        false
     }
 }
 
+/// Picks the schema whose `table` a `CreateSpatialIndex` call indexes: the
+/// named schema, or the first schema in SQLite's search order holding a
+/// relation of that name.
+unsafe fn resolve_create_owner(
+    db: *mut sqlite3,
+    schema: Option<&str>,
+    table: &str,
+) -> std::result::Result<String, SpatialIndexError> {
+    unsafe {
+        if let Some(schema) = schema {
+            let schema = canonical_schema(db, schema)?;
+            if schema_holds_table(db, &schema, table)? {
+                return Ok(schema);
+            }
+            return Err(SpatialIndexError::NoSuchQualifiedTable {
+                schema,
+                table: table.to_owned(),
+            });
+        }
+        for candidate in schema_search_order(db)? {
+            if schema_holds_table(db, &candidate, table)? {
+                return Ok(candidate);
+            }
+        }
+        Err(SpatialIndexError::NoSuchTable(table.to_owned()))
+    }
+}
+
+/// Picks the schema a `DropSpatialIndex` call clears: the named schema, or
+/// the first schema in SQLite's search order still holding a catalogue row
+/// or a managed object for `prefix`. `None` means no schema holds any.
+unsafe fn resolve_drop_owner(
+    db: *mut sqlite3,
+    schema: Option<&str>,
+    prefix: &str,
+) -> std::result::Result<Option<String>, SpatialIndexError> {
+    unsafe {
+        if let Some(schema) = schema {
+            return canonical_schema(db, schema).map(Some);
+        }
+        for candidate in schema_search_order(db)? {
+            if managed_spatial_index_objects_exist(db, &candidate, prefix)?
+                || lookup_spatial_index_catalog_owner(db, &candidate, prefix)?.is_some()
+            {
+                return Ok(Some(candidate));
+            }
+        }
+        Ok(None)
+    }
+}
+
+unsafe fn lookup_sqlite_master_object_type(
+    db: *mut sqlite3,
+    schema: &str,
+    object_name: &str,
+) -> std::result::Result<Option<String>, String> {
+    unsafe {
+        let sql = format!(
+            "SELECT type FROM [{schema}].sqlite_master WHERE name = '{object_name}' LIMIT 1"
+        );
+        sqlite_master_lookup_text(db, &sql)
+    }
+}
+
+/// Checks the catalogue of `schema`, which must be absent or a table with the
+/// required columns. An absent catalogue is created when `create_missing` is
+/// set.
+unsafe fn check_spatial_index_catalog(
+    db: *mut sqlite3,
+    schema: &str,
+    create_missing: bool,
+) -> std::result::Result<(), SpatialIndexError> {
+    unsafe {
+        let object_type =
+            lookup_sqlite_master_object_type(db, schema, SPATIAL_INDEX_CATALOG_TABLE)?;
+        match object_type.as_deref() {
+            None if create_missing => {
+                let sql = format!(
+                    "CREATE TABLE [{schema}].[{SPATIAL_INDEX_CATALOG_TABLE}] (\
+                     prefix TEXT PRIMARY KEY, \
+                     table_name TEXT NOT NULL, \
+                     column_name TEXT NOT NULL, \
+                     UNIQUE(table_name, column_name)\
+                     )"
+                );
+                exec_sql(db, &sql)?;
+                return Ok(());
+            }
+            None => return Ok(()),
+            Some("table") => {}
+            Some(object_type) => {
+                return Err(SpatialIndexError::CatalogNotATable {
+                    schema: schema.to_owned(),
+                    object_type: object_type.to_owned(),
+                });
+            }
+        }
+
+        let sql = format!("PRAGMA [{schema}].table_info([{SPATIAL_INDEX_CATALOG_TABLE}])");
+        let columns = query_text_column(db, &sql, 1)?;
+        for required_column in SPATIAL_INDEX_CATALOG_REQUIRED_COLUMNS {
+            if !columns.iter().any(|column| column == required_column) {
+                return Err(SpatialIndexError::CatalogMissingColumn {
+                    schema: schema.to_owned(),
+                    column: required_column,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Reads the `(table, column)` owning `prefix` from the catalogue of
+/// `schema`. A schema without a catalogue owns nothing.
 unsafe fn lookup_spatial_index_catalog_owner(
     db: *mut sqlite3,
+    schema: &str,
     prefix: &str,
-) -> std::result::Result<Option<(String, String)>, String> {
+) -> std::result::Result<Option<(String, String)>, SpatialIndexError> {
     unsafe {
+        if lookup_sqlite_master_object_type(db, schema, SPATIAL_INDEX_CATALOG_TABLE)?.is_none() {
+            return Ok(None);
+        }
+
         let sql = format!(
-            "SELECT table_name FROM [{SPATIAL_INDEX_CATALOG_TABLE}] \
-         WHERE prefix = '{prefix}' LIMIT 1"
+            "SELECT table_name FROM [{schema}].[{SPATIAL_INDEX_CATALOG_TABLE}] \
+             WHERE prefix = '{prefix}' LIMIT 1"
         );
-        let owner_table = sqlite_master_lookup_text(db, &sql)?;
-        let Some(owner_table) = owner_table else {
+        let Some(owner_table) = sqlite_master_lookup_text(db, &sql)? else {
             return Ok(None);
         };
 
         let sql = format!(
-            "SELECT column_name FROM [{SPATIAL_INDEX_CATALOG_TABLE}] \
-         WHERE prefix = '{prefix}' LIMIT 1"
+            "SELECT column_name FROM [{schema}].[{SPATIAL_INDEX_CATALOG_TABLE}] \
+             WHERE prefix = '{prefix}' LIMIT 1"
         );
-        let owner_column = sqlite_master_lookup_text(db, &sql)?;
-        let Some(owner_column) = owner_column else {
-            return Err(format!(
-                "internal error: catalog row for prefix [{prefix}] is missing column_name"
-            ));
-        };
+        let owner_column = sqlite_master_lookup_text(db, &sql)?
+            .ok_or_else(|| SpatialIndexError::CatalogRowIncomplete(prefix.to_owned()))?;
         Ok(Some((owner_table, owner_column)))
     }
 }
 
 unsafe fn managed_spatial_index_objects_exist(
     db: *mut sqlite3,
+    schema: &str,
     prefix: &str,
 ) -> std::result::Result<bool, String> {
     unsafe {
         let rtree_name = format!("{prefix}_rtree");
         let sql = format!(
-            "SELECT name FROM sqlite_master WHERE name IN (\
-         '{rtree_name}', \
-         '{rtree_name}_node', \
-         '{rtree_name}_parent', \
-         '{rtree_name}_rowid', \
-         '{prefix}_insert', \
-         '{prefix}_update', \
-         '{prefix}_delete'\
-         ) LIMIT 1"
+            "SELECT name FROM [{schema}].sqlite_master WHERE name IN (\
+             '{rtree_name}', \
+             '{rtree_name}_node', \
+             '{rtree_name}_parent', \
+             '{rtree_name}_rowid', \
+             '{prefix}_insert', \
+             '{prefix}_update', \
+             '{prefix}_delete'\
+             ) LIMIT 1"
         );
         Ok(sqlite_master_lookup_text(db, &sql)?.is_some())
     }
 }
 
+/// The managed object `{prefix}_rtree` must be either absent or a real
+/// SQLite table backed by the expected R-tree shadow tables.
 unsafe fn ensure_spatial_index_table_shape(
     db: *mut sqlite3,
-    ctx: *mut sqlite3_context,
+    schema: &str,
     prefix: &str,
-    label: &str,
-) -> bool {
+) -> std::result::Result<(), SpatialIndexError> {
     unsafe {
-        // The managed object `{prefix}_rtree` must be either absent or a real
-        // SQLite table backed by the expected R-tree shadow tables.
         let rtree_name = format!("{prefix}_rtree");
-        let sql = format!("SELECT type FROM sqlite_master WHERE name = '{rtree_name}' LIMIT 1");
-        let object_type = match sqlite_master_lookup_text(db, &sql) {
-            Ok(v) => v,
-            Err(e) => {
-                set_error(
-                    ctx,
-                    &format!("{label}: failed to inspect sqlite_master: {e}"),
-                );
-                return false;
-            }
+        let Some(object_type) = lookup_sqlite_master_object_type(db, schema, &rtree_name)? else {
+            return Ok(());
         };
-        if let Some(object_type) = object_type {
-            if object_type != "table" {
-                set_error(
-                    ctx,
-                    &format!(
-                        "{label}: unexpected sqlite_master entry for [{rtree_name}] \
-                     (type [{object_type}]); expected table"
-                    ),
-                );
-                return false;
-            }
-
-            for shadow_suffix in &["_node", "_parent", "_rowid"] {
-                let shadow_name = format!("{rtree_name}{shadow_suffix}");
-                let sql = format!(
-                    "SELECT name FROM sqlite_master \
-                 WHERE type = 'table' AND name = '{shadow_name}' LIMIT 1"
-                );
-                let shadow_exists = match sqlite_master_lookup_text(db, &sql) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        set_error(
-                            ctx,
-                            &format!("{label}: failed to inspect sqlite_master: {e}"),
-                        );
-                        return false;
-                    }
-                };
-                if shadow_exists.is_none() {
-                    set_error(
-                        ctx,
-                        &format!(
-                            "{label}: existing table [{rtree_name}] is not an R-tree index \
-                         managed by SQLiteGIS (missing shadow table [{shadow_name}])"
-                        ),
-                    );
-                    return false;
-                }
-            }
+        if object_type != "table" {
+            return Err(SpatialIndexError::RtreeNotATable {
+                schema: schema.to_owned(),
+                name: rtree_name,
+                object_type,
+            });
         }
 
-        true
+        for shadow_suffix in ["_node", "_parent", "_rowid"] {
+            let shadow_name = format!("{rtree_name}{shadow_suffix}");
+            let sql = format!(
+                "SELECT name FROM [{schema}].sqlite_master \
+                 WHERE type = 'table' AND name = '{shadow_name}' LIMIT 1"
+            );
+            if sqlite_master_lookup_text(db, &sql)?.is_none() {
+                return Err(SpatialIndexError::RtreeMissingShadow {
+                    schema: schema.to_owned(),
+                    name: rtree_name,
+                    shadow: shadow_name,
+                });
+            }
+        }
+        Ok(())
     }
 }
 
 unsafe fn ensure_spatial_index_objects_owned_by_table(
     db: *mut sqlite3,
-    ctx: *mut sqlite3_context,
+    schema: &str,
     table: &str,
     column: &str,
-    label: &str,
-) -> Option<SpatialIndexOwnership> {
+) -> std::result::Result<SpatialIndexOwnership, SpatialIndexError> {
     unsafe {
         // Object names are built as `{table}_{column}_...`. Different input pairs
         // can collide (e.g. `a_b`+`c` vs `a`+`b_c`). Detect and fail fast instead
         // of silently reusing another table's triggers/index objects.
         let prefix = format!("{table}_{column}");
-        for suffix in &["_insert", "_update", "_delete"] {
-            let trigger_name = format!("{prefix}{suffix}");
+        for suffix in SPATIAL_INDEX_TRIGGER_SUFFIXES {
+            let trigger = format!("{prefix}{suffix}");
             let sql = format!(
-                "SELECT tbl_name FROM sqlite_master \
-             WHERE type = 'trigger' AND name = '{trigger_name}' LIMIT 1"
+                "SELECT tbl_name FROM [{schema}].sqlite_master \
+                 WHERE type = 'trigger' AND name = '{trigger}' LIMIT 1"
             );
-            let owner = match sqlite_master_lookup_text(db, &sql) {
-                Ok(v) => v,
-                Err(e) => {
-                    set_error(
-                        ctx,
-                        &format!("{label}: failed to inspect sqlite_master: {e}"),
-                    );
-                    return None;
-                }
-            };
-            if let Some(owner) = owner {
+            if let Some(owner) = sqlite_master_lookup_text(db, &sql)? {
                 if owner != table {
-                    set_error(
-                        ctx,
-                        &format!(
-                            "{label}: naming collision for trigger [{trigger_name}] \
-                         between tables [{owner}] and [{table}]"
-                        ),
-                    );
-                    return None;
+                    return Err(SpatialIndexError::TriggerCollision {
+                        schema: schema.to_owned(),
+                        trigger,
+                        owner,
+                        table: table.to_owned(),
+                    });
                 }
             }
         }
 
-        if !ensure_spatial_index_table_shape(db, ctx, &prefix, label) {
-            return None;
-        }
+        ensure_spatial_index_table_shape(db, schema, &prefix)?;
 
-        let owner = match lookup_spatial_index_catalog_owner(db, &prefix) {
-            Ok(v) => v,
-            Err(e) => {
-                set_error(ctx, &format!("{label}: failed to inspect catalog: {e}"));
-                return None;
-            }
-        };
-        if let Some((owner_table, owner_column)) = owner {
+        if let Some((owner_table, owner_column)) =
+            lookup_spatial_index_catalog_owner(db, schema, &prefix)?
+        {
             if owner_table == table && owner_column == column {
-                return Some(SpatialIndexOwnership::Owned);
+                return Ok(SpatialIndexOwnership::Owned);
             }
-            set_error(
-                ctx,
-                &format!(
-                    "{label}: naming collision for managed prefix [{prefix}] \
-                 between [{owner_table}.{owner_column}] and [{table}.{column}]"
-                ),
-            );
-            return None;
+            return Err(SpatialIndexError::PrefixCollision {
+                schema: schema.to_owned(),
+                prefix,
+                owner: format!("{owner_table}.{owner_column}"),
+                requested: format!("{table}.{column}"),
+            });
         }
 
-        let objects_exist = match managed_spatial_index_objects_exist(db, &prefix) {
-            Ok(v) => v,
-            Err(e) => {
-                set_error(
-                    ctx,
-                    &format!("{label}: failed to inspect sqlite_master: {e}"),
-                );
-                return None;
-            }
-        };
-        if objects_exist {
-            set_error(
-                ctx,
-                &format!(
-                    "{label}: cannot prove ownership for [{prefix}] because managed objects exist \
-                 without an ownership marker"
-                ),
-            );
-            return None;
+        if managed_spatial_index_objects_exist(db, schema, &prefix)? {
+            return Err(SpatialIndexError::UnmarkedObjects {
+                schema: schema.to_owned(),
+                prefix,
+            });
         }
 
-        Some(SpatialIndexOwnership::Absent)
+        Ok(SpatialIndexOwnership::Absent)
     }
 }
 
-// Spatial index callbacks
-
-/// Extract and validate `(table, column)` identifiers from the first two args.
-/// On failure, sets an error on `ctx` and returns `None`.
-unsafe fn get_table_column<'a>(
-    ctx: *mut sqlite3_context,
-    argv: *mut *mut sqlite3_value,
-    label: &str,
-) -> Option<(&'a str, &'a str)> {
+/// Indexes `table.column` in the schema `resolve_create_owner` picks,
+/// replacing the R-tree contents when the index already exists.
+unsafe fn create_spatial_index(
+    db: *mut sqlite3,
+    args: SpatialIndexArgs<'_>,
+) -> std::result::Result<(), SpatialIndexError> {
     unsafe {
-        let table = match get_text(argv, 0) {
-            SqlTextArg::Value(v) => v,
-            SqlTextArg::Null => {
-                set_error(ctx, &format!("{label}: table name must not be NULL"));
-                return None;
-            }
-            SqlTextArg::InvalidUtf8 => {
-                set_error(
-                    ctx,
-                    &format!("{label}: table name must be valid UTF-8 text"),
-                );
-                return None;
-            }
-        };
-        let column = match get_text(argv, 1) {
-            SqlTextArg::Value(v) => v,
-            SqlTextArg::Null => {
-                set_error(ctx, &format!("{label}: column name must not be NULL"));
-                return None;
-            }
-            SqlTextArg::InvalidUtf8 => {
-                set_error(
-                    ctx,
-                    &format!("{label}: column name must be valid UTF-8 text"),
-                );
-                return None;
-            }
-        };
-        let Some(table) = validate_identifier(table) else {
-            set_error(
-                ctx,
-                &format!("{label}: invalid table name (only [a-zA-Z0-9_] allowed)"),
-            );
-            return None;
-        };
-        let Some(column) = validate_identifier(column) else {
-            set_error(
-                ctx,
-                &format!("{label}: invalid column name (only [a-zA-Z0-9_] allowed)"),
-            );
-            return None;
-        };
-        Some((table, column))
-    }
-}
+        let SpatialIndexArgs {
+            schema,
+            table,
+            column,
+        } = args;
+        let schema = resolve_create_owner(db, schema, table)?;
+        let prefix = format!("{table}_{column}");
+        let rtree = format!("{prefix}_rtree");
 
-unsafe extern "C" fn create_spatial_index_xfunc(
-    ctx: *mut sqlite3_context,
-    _n: c_int,
-    argv: *mut *mut sqlite3_value,
-) {
-    unsafe {
-        xfunc_guard(ctx, "CreateSpatialIndex", || {
-            let Some((table, column)) = get_table_column(ctx, argv, "CreateSpatialIndex") else {
-                return;
-            };
+        check_spatial_index_catalog(db, &schema, true)?;
+        ensure_spatial_index_objects_owned_by_table(db, &schema, table, column)?;
 
-            let db = host_api::context_db_handle(ctx);
-            let prefix = format!("{table}_{column}");
-            let rtree = format!("{prefix}_rtree");
-            let savepoint = "sqlitegis_create_spatial_index";
+        // Reject WITHOUT ROWID tables before creating any state. The
+        // maintenance triggers reference NEW.rowid and OLD.rowid, which only
+        // exist on regular rowid tables. SQLite refuses to prepare a SELECT
+        // of rowid against a WITHOUT ROWID table, so the probe fails cleanly
+        // at parse time.
+        let probe = format!("SELECT rowid FROM [{schema}].[{table}] LIMIT 0");
+        if exec_sql(db, &probe).is_err() {
+            return Err(SpatialIndexError::WithoutRowid {
+                schema,
+                table: table.to_owned(),
+            });
+        }
 
-            if exec_sql(db, ctx, &format!("SAVEPOINT {savepoint}")) != SQLITE_OK {
-                return;
-            }
-
-            if !ensure_spatial_index_catalog_table(db, ctx, "CreateSpatialIndex") {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
-            if !validate_spatial_index_catalog_shape(db, ctx, "CreateSpatialIndex") {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
-
-            if ensure_spatial_index_objects_owned_by_table(
-                db,
-                ctx,
-                table,
-                column,
-                "CreateSpatialIndex",
-            )
-            .is_none()
-            {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
-
-            // Reject WITHOUT ROWID tables before creating any state. The
-            // maintenance triggers reference NEW.rowid and OLD.rowid, which only
-            // exist on regular rowid tables. SQLite refuses to prepare a SELECT
-            // of rowid against a WITHOUT ROWID table, so the probe fails cleanly
-            // at parse time. A successful probe also incidentally proves the
-            // table exists.
-            let probe = format!("SELECT rowid FROM [{table}] LIMIT 0");
-            if exec_sql_silent(db, &probe) != SQLITE_OK {
-                set_error(
-                    ctx,
-                    &format!(
-                        "CreateSpatialIndex: table [{table}] has no rowid column. \
-                     WITHOUT ROWID tables are not supported. Recreate the table \
-                     without the WITHOUT ROWID clause, or verify the table exists."
-                    ),
-                );
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
-
-            // 1. Create the R-tree virtual table if missing.
-            let sql = format!(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS [{rtree}] USING rtree(id, xmin, xmax, ymin, ymax)"
+        // 1. Create the R-tree virtual table if missing.
+        let sql = format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS [{schema}].[{rtree}] \
+             USING rtree(id, xmin, xmax, ymin, ymax)"
         );
-            if exec_sql(db, ctx, &sql) != SQLITE_OK {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
+        exec_sql(db, &sql)?;
 
-            // 2. Rebuild index contents from the base table (idempotent on repeated calls).
-            let sql = format!("DELETE FROM [{rtree}]");
-            if exec_sql(db, ctx, &sql) != SQLITE_OK {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
-
-            let sql = format!(
-                "INSERT INTO [{rtree}] \
+        // 2. Rebuild index contents from the base table (idempotent on repeated calls).
+        exec_sql(db, &format!("DELETE FROM [{schema}].[{rtree}]"))?;
+        let sql = format!(
+            "INSERT INTO [{schema}].[{rtree}] \
              SELECT rowid, ST_XMin([{column}]), ST_XMax([{column}]), \
              ST_YMin([{column}]), ST_YMax([{column}]) \
-             FROM [{table}] WHERE [{column}] IS NOT NULL AND ST_IsEmpty([{column}]) = 0"
-            );
-            if exec_sql(db, ctx, &sql) != SQLITE_OK {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
+             FROM [{schema}].[{table}] \
+             WHERE [{column}] IS NOT NULL AND ST_IsEmpty([{column}]) = 0"
+        );
+        exec_sql(db, &sql)?;
 
-            // 3. AFTER INSERT trigger
-            let trigger_insert = format!("{table}_{column}_insert");
-            let sql = format!(
-                "CREATE TRIGGER IF NOT EXISTS [{trigger_insert}] AFTER INSERT ON [{table}] \
+        // The trigger name carries the schema, and SQLite binds the ON
+        // table to it. Trigger bodies cannot qualify table names. A
+        // non-TEMP trigger body only reaches its own schema, and a TEMP
+        // trigger body resolves temp first, where the R-tree was just
+        // created, so every trigger writes the R-tree of its own schema.
+
+        // 3. AFTER INSERT trigger
+        let sql = format!(
+            "CREATE TRIGGER IF NOT EXISTS [{schema}].[{prefix}_insert] \
+             AFTER INSERT ON [{table}] \
              WHEN NEW.[{column}] IS NOT NULL AND ST_IsEmpty(NEW.[{column}]) = 0 \
              BEGIN \
                INSERT INTO [{rtree}] VALUES ( \
@@ -1799,21 +1746,18 @@ unsafe extern "C" fn create_spatial_index_xfunc(
                  ST_YMin(NEW.[{column}]), ST_YMax(NEW.[{column}]) \
                ); \
              END"
-            );
-            if exec_sql(db, ctx, &sql) != SQLITE_OK {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
+        );
+        exec_sql(db, &sql)?;
 
-            // 4. AFTER UPDATE trigger. Broad UPDATE so that rowid changes
-            // (UPDATE ... SET rowid = ... or via INTEGER PRIMARY KEY rewrite)
-            // still propagate to the index. The WHEN clause skips the DELETE
-            // plus INSERT when neither the geometry blob nor the rowid changed,
-            // which is the common case for UPDATEs that only touch unrelated
-            // columns.
-            let trigger_update = format!("{table}_{column}_update");
-            let sql = format!(
-                "CREATE TRIGGER IF NOT EXISTS [{trigger_update}] AFTER UPDATE ON [{table}] \
+        // 4. AFTER UPDATE trigger. Broad UPDATE so that rowid changes
+        // (UPDATE ... SET rowid = ... or via INTEGER PRIMARY KEY rewrite)
+        // still propagate to the index. The WHEN clause skips the DELETE
+        // plus INSERT when neither the geometry blob nor the rowid changed,
+        // which is the common case for UPDATEs that only touch unrelated
+        // columns.
+        let sql = format!(
+            "CREATE TRIGGER IF NOT EXISTS [{schema}].[{prefix}_update] \
+             AFTER UPDATE ON [{table}] \
              WHEN OLD.[{column}] IS NOT NEW.[{column}] OR OLD.rowid IS NOT NEW.rowid \
              BEGIN \
                DELETE FROM [{rtree}] WHERE id = OLD.rowid; \
@@ -1823,123 +1767,200 @@ unsafe extern "C" fn create_spatial_index_xfunc(
                    ST_YMin(NEW.[{column}]), ST_YMax(NEW.[{column}]) \
                  WHERE NEW.[{column}] IS NOT NULL AND ST_IsEmpty(NEW.[{column}]) = 0; \
              END"
-            );
-            if exec_sql(db, ctx, &sql) != SQLITE_OK {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
+        );
+        exec_sql(db, &sql)?;
 
-            // 5. AFTER DELETE trigger
-            let trigger_delete = format!("{table}_{column}_delete");
-            let sql = format!(
-                "CREATE TRIGGER IF NOT EXISTS [{trigger_delete}] AFTER DELETE ON [{table}] \
+        // 5. AFTER DELETE trigger
+        let sql = format!(
+            "CREATE TRIGGER IF NOT EXISTS [{schema}].[{prefix}_delete] \
+             AFTER DELETE ON [{table}] \
              BEGIN \
                DELETE FROM [{rtree}] WHERE id = OLD.rowid; \
              END"
-            );
-            if exec_sql(db, ctx, &sql) != SQLITE_OK {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
+        );
+        exec_sql(db, &sql)?;
 
-            let sql = format!(
-                "INSERT INTO [{SPATIAL_INDEX_CATALOG_TABLE}] (prefix, table_name, column_name) \
+        let sql = format!(
+            "INSERT INTO [{schema}].[{SPATIAL_INDEX_CATALOG_TABLE}] \
+             (prefix, table_name, column_name) \
              VALUES ('{prefix}', '{table}', '{column}') \
              ON CONFLICT(prefix) DO UPDATE SET \
              table_name = excluded.table_name, \
              column_name = excluded.column_name"
+        );
+        exec_sql(db, &sql)?;
+        Ok(())
+    }
+}
+
+/// Removes the index of `table.column` from the schema `resolve_drop_owner`
+/// picks. Succeeds without changes when no schema holds the index.
+unsafe fn drop_spatial_index(
+    db: *mut sqlite3,
+    args: SpatialIndexArgs<'_>,
+) -> std::result::Result<(), SpatialIndexError> {
+    unsafe {
+        let SpatialIndexArgs {
+            schema,
+            table,
+            column,
+        } = args;
+        let prefix = format!("{table}_{column}");
+        let Some(schema) = resolve_drop_owner(db, schema, &prefix)? else {
+            return Ok(());
+        };
+
+        check_spatial_index_catalog(db, &schema, false)?;
+        if ensure_spatial_index_objects_owned_by_table(db, &schema, table, column)?
+            == SpatialIndexOwnership::Absent
+        {
+            return Ok(());
+        }
+
+        // Drop triggers first, then the R-tree table. Ownership has already
+        // been verified to avoid cross-table collisions on derived names.
+        for suffix in SPATIAL_INDEX_TRIGGER_SUFFIXES {
+            let sql = format!("DROP TRIGGER IF EXISTS [{schema}].[{prefix}{suffix}]");
+            exec_sql(db, &sql)?;
+        }
+        let sql = format!("DROP TABLE IF EXISTS [{schema}].[{prefix}_rtree]");
+        exec_sql(db, &sql)?;
+        let sql = format!(
+            "DELETE FROM [{schema}].[{SPATIAL_INDEX_CATALOG_TABLE}] WHERE prefix = '{prefix}'"
+        );
+        exec_sql(db, &sql)?;
+        Ok(())
+    }
+}
+
+// Spatial index callbacks
+
+/// Arguments of `CreateSpatialIndex` and `DropSpatialIndex`, called as
+/// `(table, column)` or `(schema, table, column)`.
+#[derive(Clone, Copy)]
+struct SpatialIndexArgs<'a> {
+    schema: Option<&'a str>,
+    table: &'a str,
+    column: &'a str,
+}
+
+/// Extracts the identifier argument `i`, named `kind` in error messages.
+/// On failure, sets an error on `ctx` and returns `None`.
+unsafe fn get_identifier_arg<'a>(
+    ctx: *mut sqlite3_context,
+    argv: *mut *mut sqlite3_value,
+    i: usize,
+    label: &str,
+    kind: &str,
+) -> Option<&'a str> {
+    unsafe {
+        let value = match get_text(argv, i) {
+            SqlTextArg::Value(v) => v,
+            SqlTextArg::Null => {
+                set_error(ctx, &format!("{label}: {kind} name must not be NULL"));
+                return None;
+            }
+            SqlTextArg::InvalidUtf8 => {
+                set_error(
+                    ctx,
+                    &format!("{label}: {kind} name must be valid UTF-8 text"),
+                );
+                return None;
+            }
+        };
+        let Some(value) = validate_identifier(value) else {
+            set_error(
+                ctx,
+                &format!("{label}: invalid {kind} name (only [a-zA-Z0-9_] allowed)"),
             );
-            if exec_sql(db, ctx, &sql) != SQLITE_OK {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
+            return None;
+        };
+        Some(value)
+    }
+}
 
-            if exec_sql(db, ctx, &format!("RELEASE {savepoint}")) != SQLITE_OK {
-                return;
-            }
+/// Extracts and validates the spatial index arguments for an `n_args` call.
+/// On failure, sets an error on `ctx` and returns `None`.
+unsafe fn get_spatial_index_args<'a>(
+    ctx: *mut sqlite3_context,
+    n_args: c_int,
+    argv: *mut *mut sqlite3_value,
+    label: &str,
+) -> Option<SpatialIndexArgs<'a>> {
+    unsafe {
+        let (schema, first) = if n_args == 3 {
+            (Some(get_identifier_arg(ctx, argv, 0, label, "schema")?), 1)
+        } else {
+            (None, 0)
+        };
+        let table = get_identifier_arg(ctx, argv, first, label, "table")?;
+        let column = get_identifier_arg(ctx, argv, first + 1, label, "column")?;
+        Some(SpatialIndexArgs {
+            schema,
+            table,
+            column,
+        })
+    }
+}
 
-            set_i32(ctx, 1);
+/// Runs one spatial index lifecycle call inside `savepoint`, reporting `1` or
+/// the error prefixed with `label`.
+unsafe fn spatial_index_xfunc(
+    ctx: *mut sqlite3_context,
+    n_args: c_int,
+    argv: *mut *mut sqlite3_value,
+    label: &str,
+    savepoint: &str,
+    body: unsafe fn(
+        *mut sqlite3,
+        SpatialIndexArgs<'_>,
+    ) -> std::result::Result<(), SpatialIndexError>,
+) {
+    unsafe {
+        xfunc_guard(ctx, label, || {
+            let Some(args) = get_spatial_index_args(ctx, n_args, argv, label) else {
+                return;
+            };
+            let db = host_api::context_db_handle(ctx);
+            match run_in_savepoint(db, savepoint, || body(db, args)) {
+                Ok(()) => set_i32(ctx, 1),
+                Err(e) => set_error(ctx, &format!("{label}: {e}")),
+            }
         });
+    }
+}
+
+unsafe extern "C" fn create_spatial_index_xfunc(
+    ctx: *mut sqlite3_context,
+    n_args: c_int,
+    argv: *mut *mut sqlite3_value,
+) {
+    unsafe {
+        spatial_index_xfunc(
+            ctx,
+            n_args,
+            argv,
+            "CreateSpatialIndex",
+            "sqlitegis_create_spatial_index",
+            create_spatial_index,
+        );
     }
 }
 
 unsafe extern "C" fn drop_spatial_index_xfunc(
     ctx: *mut sqlite3_context,
-    _n: c_int,
+    n_args: c_int,
     argv: *mut *mut sqlite3_value,
 ) {
     unsafe {
-        xfunc_guard(ctx, "DropSpatialIndex", || {
-            let Some((table, column)) = get_table_column(ctx, argv, "DropSpatialIndex") else {
-                return;
-            };
-
-            let db = host_api::context_db_handle(ctx);
-            let prefix = format!("{table}_{column}");
-            let savepoint = "sqlitegis_drop_spatial_index";
-
-            if exec_sql(db, ctx, &format!("SAVEPOINT {savepoint}")) != SQLITE_OK {
-                return;
-            }
-
-            if !ensure_spatial_index_catalog_table(db, ctx, "DropSpatialIndex") {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
-            if !validate_spatial_index_catalog_shape(db, ctx, "DropSpatialIndex") {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
-
-            let ownership = match ensure_spatial_index_objects_owned_by_table(
-                db,
-                ctx,
-                table,
-                column,
-                "DropSpatialIndex",
-            ) {
-                Some(v) => v,
-                None => {
-                    rollback_savepoint(db, ctx, savepoint);
-                    return;
-                }
-            };
-            if ownership == SpatialIndexOwnership::Absent {
-                if exec_sql(db, ctx, &format!("RELEASE {savepoint}")) != SQLITE_OK {
-                    return;
-                }
-                set_i32(ctx, 1);
-                return;
-            }
-
-            // Drop triggers first, then the R-tree table. Ownership has already
-            // been verified to avoid cross-table collisions on derived names.
-            for suffix in &["_insert", "_update", "_delete"] {
-                let sql = format!("DROP TRIGGER IF EXISTS [{prefix}{suffix}]");
-                if exec_sql(db, ctx, &sql) != SQLITE_OK {
-                    rollback_savepoint(db, ctx, savepoint);
-                    return;
-                }
-            }
-            let sql = format!("DROP TABLE IF EXISTS [{prefix}_rtree]");
-            if exec_sql(db, ctx, &sql) != SQLITE_OK {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
-
-            let sql =
-                format!("DELETE FROM [{SPATIAL_INDEX_CATALOG_TABLE}] WHERE prefix = '{prefix}'");
-            if exec_sql(db, ctx, &sql) != SQLITE_OK {
-                rollback_savepoint(db, ctx, savepoint);
-                return;
-            }
-
-            if exec_sql(db, ctx, &format!("RELEASE {savepoint}")) != SQLITE_OK {
-                return;
-            }
-
-            set_i32(ctx, 1);
-        });
+        spatial_index_xfunc(
+            ctx,
+            n_args,
+            argv,
+            "DropSpatialIndex",
+            "sqlitegis_drop_spatial_index",
+            drop_spatial_index,
+        );
     }
 }
 
@@ -2547,10 +2568,7 @@ mod tests {
             let rc = register_functions(db);
             assert_eq!(rc, SQLITE_OK, "register_functions should succeed");
 
-            assert_eq!(
-                exec_sql_inner(db, "CREATE TABLE _rt(geom BLOB)", None),
-                SQLITE_OK
-            );
+            assert_eq!(exec_sql(db, "CREATE TABLE _rt(geom BLOB)"), Ok(()));
 
             for spec in SQLITE_DIRECT_ONLY_FUNCTIONS {
                 for case in spec.semantic_cases {

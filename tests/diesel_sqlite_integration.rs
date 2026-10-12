@@ -566,10 +566,16 @@ fn dwithin_sphere_indexed_matches_naive() {
         .load(&mut c)
         .unwrap();
 
-        let indexed: Vec<IdRow> =
-            dwithin_sphere_indexed_sql("radius_cities", "geom", (lon, lat), radius_m, "t.id")
-                .load::<IdRow>(&mut c)
-                .unwrap();
+        let indexed: Vec<IdRow> = dwithin_sphere_indexed_sql(
+            "main",
+            "radius_cities",
+            "geom",
+            (lon, lat),
+            radius_m,
+            "t.id",
+        )
+        .load::<IdRow>(&mut c)
+        .unwrap();
 
         let mut naive_ids: Vec<i64> = naive.iter().map(|r| r.id).collect();
         let mut indexed_ids: Vec<i64> = indexed.iter().map(|r| r.id).collect();
@@ -601,6 +607,7 @@ fn dwithin_sphere_indexed_uses_rtree_plan() {
     seed_radius_cities(&mut c, "radius_cities_plan");
 
     let sql = dwithin_sphere_indexed_sql_string(
+        "main",
         "radius_cities_plan",
         "geom",
         (0.0, 0.0),
@@ -653,7 +660,7 @@ fn intersects_window_indexed_matches_naive() {
         .unwrap();
 
         let indexed: Vec<IdRow> =
-            intersects_window_indexed_sql("window_cities", "geom", window, "t.id")
+            intersects_window_indexed_sql("main", "window_cities", "geom", window, "t.id")
                 .load::<IdRow>(&mut c)
                 .unwrap();
 
@@ -684,6 +691,7 @@ fn intersects_window_indexed_uses_rtree_plan() {
     seed_radius_cities(&mut c, "window_cities_plan");
 
     let sql = intersects_window_indexed_sql_string(
+        "main",
         "window_cities_plan",
         "geom",
         (-30.0, -10.0, 30.0, 10.0),
@@ -735,6 +743,7 @@ fn nearest_sphere_indexed_matches_naive() {
         .unwrap();
 
         let indexed: Vec<IdRow> = nearest_sphere_indexed_sql(
+            "main",
             "nearest_cities",
             "geom",
             (lon, lat),
@@ -770,6 +779,7 @@ fn nearest_sphere_indexed_uses_rtree_plan() {
     seed_radius_cities(&mut c, "nearest_cities_plan");
 
     let sql = nearest_sphere_indexed_sql_string(
+        "main",
         "nearest_cities_plan",
         "geom",
         (0.0, 0.0),
@@ -786,4 +796,69 @@ fn nearest_sphere_indexed_uses_rtree_plan() {
                 || row.detail.contains("VIRTUAL TABLE INDEX")),
         "expected plan to engage the R-tree, got: {plan:?}",
     );
+}
+
+/// Every query builder reads the table and the R-tree of the schema it is
+/// given, so an unindexed `temp` table shadowing an indexed `main` table
+/// cannot pair temp rows with main bounding boxes. Raw SQL seeds the data
+/// because the scenario needs one table name in two schemas.
+#[test]
+fn indexed_query_builders_stay_in_their_schema() {
+    use sqlitegis::diesel::query_helpers::{
+        dwithin_sphere_indexed_sql, intersects_window_indexed_sql, nearest_sphere_indexed_sql,
+    };
+
+    let mut c = conn();
+    for sql in [
+        "CREATE TABLE main.shadowed (id INTEGER PRIMARY KEY, geom BLOB)",
+        "INSERT INTO main.shadowed VALUES (1, ST_Point(10.0, 10.0, 4326))",
+        "SELECT CreateSpatialIndex('main', 'shadowed', 'geom')",
+        // Same rowid, far from the probe. A cross-schema join would return
+        // it through main's bounding box for rowid 1.
+        "CREATE TEMP TABLE shadowed (id INTEGER PRIMARY KEY, geom BLOB)",
+        "INSERT INTO temp.shadowed VALUES (1, ST_Point(-120.0, -40.0, 4326))",
+    ] {
+        sql_query(sql).execute(&mut c).unwrap();
+    }
+
+    let ids = |rows: Vec<IdRow>| rows.into_iter().map(|r| r.id).collect::<Vec<_>>();
+
+    let dwithin =
+        dwithin_sphere_indexed_sql("main", "shadowed", "geom", (10.0, 10.0), 1_000.0, "t.id")
+            .load::<IdRow>(&mut c)
+            .unwrap();
+    assert_eq!(ids(dwithin), vec![1]);
+
+    let window =
+        intersects_window_indexed_sql("main", "shadowed", "geom", (9.0, 9.0, 11.0, 11.0), "t.id")
+            .load::<IdRow>(&mut c)
+            .unwrap();
+    assert_eq!(ids(window), vec![1]);
+
+    // The nearest builder has no exact refinement, so it projects the
+    // longitude, which differs between the two rows sharing rowid 1.
+    let nearest = nearest_sphere_indexed_sql(
+        "main",
+        "shadowed",
+        "geom",
+        (10.0, 10.0),
+        1_000.0,
+        1,
+        "CAST(ST_X(t.geom) AS INTEGER) AS id",
+    )
+    .load::<IdRow>(&mut c)
+    .unwrap();
+    assert_eq!(ids(nearest), vec![10]);
+
+    // The temp table has no index, so the temp builders fail instead of
+    // borrowing main's R-tree.
+    assert!(intersects_window_indexed_sql(
+        "temp",
+        "shadowed",
+        "geom",
+        (9.0, 9.0, 11.0, 11.0),
+        "t.id",
+    )
+    .load::<IdRow>(&mut c)
+    .is_err());
 }

@@ -808,12 +808,30 @@ pub const SQLITE_DIRECT_ONLY_FUNCTIONS: &[SqliteFunctionSpec] = &[
         "create_spatial_index_xfunc"
     ),
     direct_spec!(
+        "CreateSpatialIndex",
+        3,
+        Numeric,
+        "SELECT CreateSpatialIndex('main', '_rt', 'geom')",
+        "SELECT CreateSpatialIndex(NULL, '_rt', 'geom')",
+        "schema name must not be NULL",
+        "create_spatial_index_xfunc"
+    ),
+    direct_spec!(
         "DropSpatialIndex",
         2,
         Numeric,
         "SELECT DropSpatialIndex('_rt', 'geom')",
         "SELECT DropSpatialIndex(NULL, 'geom')",
         "table name must not be NULL",
+        "drop_spatial_index_xfunc"
+    ),
+    direct_spec!(
+        "DropSpatialIndex",
+        3,
+        Numeric,
+        "SELECT DropSpatialIndex('main', '_rt', 'geom')",
+        "SELECT DropSpatialIndex(NULL, '_rt', 'geom')",
+        "schema name must not be NULL",
         "drop_spatial_index_xfunc"
     ),
 ];

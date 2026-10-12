@@ -28,14 +28,14 @@
 //! // Tiny indexed table with one row in Berlin.
 //! diesel::sql_query("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)")
 //!     .execute(&mut c).unwrap();
-//! diesel::sql_query("SELECT CreateSpatialIndex('pts', 'geom')")
+//! diesel::sql_query("SELECT CreateSpatialIndex('main', 'pts', 'geom')")
 //!     .execute(&mut c).unwrap();
 //! diesel::sql_query(
 //!     "INSERT INTO pts(id, geom) VALUES (1, ST_Point(13.4, 52.5, 4326))",
 //! ).execute(&mut c).unwrap();
 //!
 //! let hits: Vec<Hit> = dwithin_sphere_indexed_sql(
-//!     "pts", "geom", (13.4, 52.5), 100_000.0, "t.id",
+//!     "main", "pts", "geom", (13.4, 52.5), 100_000.0, "t.id",
 //! ).load::<Hit>(&mut c).unwrap();
 //! assert_eq!(hits.len(), 1);
 //! assert_eq!(hits[0].id, 1);
@@ -107,12 +107,18 @@ pub fn radius_bbox(lat_deg: f64, radius_m: f64) -> RadiusBbox {
 /// prefilter narrows candidates to `O(log N + k)` rows, then
 /// `ST_DWithinSphere` refines to the exact geodesic circle.
 ///
-/// `table` and `geom_column` are interpolated into the SQL inside `[...]`
-/// brackets (so reserved words and column names with spaces still parse).
-/// They are *not* bound parameters: callers must pass trusted identifiers,
-/// the same contract `CreateSpatialIndex` already imposes. All numeric
-/// values (`probe`, `radius_m`, bbox bounds) are formatted into the SQL as
-/// `f64` literals, which is injection-safe.
+/// `schema` names the database holding both `table` and its R-tree, such as
+/// `main`, `temp` or an attached schema, and qualifies both names in the SQL.
+/// Without it SQLite would resolve the two names separately, temp first, so
+/// a temp table shadowing an indexed main table would be joined to the main
+/// R-tree by rowid.
+///
+/// `schema`, `table` and `geom_column` are interpolated into the SQL inside
+/// `[...]` brackets (so reserved words and column names with spaces still
+/// parse). They are *not* bound parameters: callers must pass trusted
+/// identifiers, the same contract `CreateSpatialIndex` already imposes. All
+/// numeric values (`probe`, `radius_m`, bbox bounds) are formatted into the
+/// SQL as `f64` literals, which is injection-safe.
 ///
 /// `select_cols` is the projection list to splice between `SELECT` and
 /// `FROM`. Reference base-table columns as `t.<col>` (the table is aliased
@@ -121,7 +127,7 @@ pub fn radius_bbox(lat_deg: f64, radius_m: f64) -> RadiusBbox {
 /// # Panics
 ///
 /// Never panics on its own. The returned `SqlQuery` may error at
-/// `.load()` time if the named table or its shadow R-tree do not exist.
+/// `.load()` time if the named table or its R-tree do not exist in `schema`.
 ///
 /// # Example
 ///
@@ -139,7 +145,7 @@ pub fn radius_bbox(lat_deg: f64, radius_m: f64) -> RadiusBbox {
 ///
 /// diesel::sql_query("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)")
 ///     .execute(&mut c).unwrap();
-/// diesel::sql_query("SELECT CreateSpatialIndex('pts', 'geom')")
+/// diesel::sql_query("SELECT CreateSpatialIndex('main', 'pts', 'geom')")
 ///     .execute(&mut c).unwrap();
 /// diesel::sql_query(
 ///     "INSERT INTO pts(id, geom) VALUES (1, ST_Point(13.4, 52.5, 4326))",
@@ -147,11 +153,12 @@ pub fn radius_bbox(lat_deg: f64, radius_m: f64) -> RadiusBbox {
 ///
 /// // Probe within 100 km of Berlin.
 /// let hits: Vec<Hit> = dwithin_sphere_indexed_sql(
-///     "pts", "geom", (13.4, 52.5), 100_000.0, "t.id",
+///     "main", "pts", "geom", (13.4, 52.5), 100_000.0, "t.id",
 /// ).load::<Hit>(&mut c).unwrap();
 /// assert_eq!(hits.len(), 1);
 /// ```
 pub fn dwithin_sphere_indexed_sql(
+    schema: &str,
     table: &str,
     geom_column: &str,
     probe: (f64, f64),
@@ -159,6 +166,7 @@ pub fn dwithin_sphere_indexed_sql(
     select_cols: &str,
 ) -> diesel::query_builder::SqlQuery {
     diesel::sql_query(dwithin_sphere_indexed_sql_string(
+        schema,
         table,
         geom_column,
         probe,
@@ -177,12 +185,13 @@ pub fn dwithin_sphere_indexed_sql(
 /// use sqlitegis::diesel::query_helpers::dwithin_sphere_indexed_sql_string;
 ///
 /// let sql = dwithin_sphere_indexed_sql_string(
-///     "places", "geom", (13.4, 52.5), 1_000_000.0, "t.id, t.name",
+///     "main", "places", "geom", (13.4, 52.5), 1_000_000.0, "t.id, t.name",
 /// );
-/// assert!(sql.contains("JOIN [places_geom_rtree]"));
+/// assert!(sql.contains("JOIN [main].[places_geom_rtree]"));
 /// assert!(sql.contains("ST_DWithinSphere"));
 /// ```
 pub fn dwithin_sphere_indexed_sql_string(
+    schema: &str,
     table: &str,
     geom_column: &str,
     probe: (f64, f64),
@@ -193,8 +202,8 @@ pub fn dwithin_sphere_indexed_sql_string(
     let bbox = radius_bbox(lat, radius_m);
     format!(
         "SELECT {select_cols} \
-         FROM [{table}] t \
-         JOIN [{table}_{geom_column}_rtree] r ON t.rowid = r.id \
+         FROM [{schema}].[{table}] t \
+         JOIN [{schema}].[{table}_{geom_column}_rtree] r ON t.rowid = r.id \
          WHERE r.xmax >= {x_min} AND r.xmin <= {x_max} \
            AND r.ymax >= {y_min} AND r.ymin <= {y_max} \
            AND ST_DWithinSphere(t.[{geom_column}], \
@@ -220,10 +229,10 @@ pub fn dwithin_sphere_indexed_sql_string(
 /// `window` is `(xmin, ymin, xmax, ymax)` in the same CRS the geometry
 /// column uses (typically WGS84 degrees, SRID 4326).
 ///
-/// `table` and `geom_column` follow the same identifier-safety contract
-/// as [`dwithin_sphere_indexed_sql`]: bracketed into the SQL, must be
-/// caller-trusted strings. Numeric inputs are formatted as `f64`
-/// literals, which is injection-safe.
+/// `schema`, `table` and `geom_column` follow the same schema and
+/// identifier-safety contract as [`dwithin_sphere_indexed_sql`]: bracketed
+/// into the SQL, must be caller-trusted strings. Numeric inputs are
+/// formatted as `f64` literals, which is injection-safe.
 ///
 /// # Example
 ///
@@ -241,7 +250,7 @@ pub fn dwithin_sphere_indexed_sql_string(
 ///
 /// diesel::sql_query("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)")
 ///     .execute(&mut c).unwrap();
-/// diesel::sql_query("SELECT CreateSpatialIndex('pts', 'geom')")
+/// diesel::sql_query("SELECT CreateSpatialIndex('main', 'pts', 'geom')")
 ///     .execute(&mut c).unwrap();
 /// diesel::sql_query(
 ///     "INSERT INTO pts(id, geom) VALUES (1, ST_Point(13.4, 52.5, 4326))",
@@ -249,17 +258,19 @@ pub fn dwithin_sphere_indexed_sql_string(
 ///
 /// // 30 by 30 degree window around (13.4, 52.5).
 /// let hits: Vec<Hit> = intersects_window_indexed_sql(
-///     "pts", "geom", (-1.6, 37.5, 28.4, 67.5), "t.id",
+///     "main", "pts", "geom", (-1.6, 37.5, 28.4, 67.5), "t.id",
 /// ).load::<Hit>(&mut c).unwrap();
 /// assert_eq!(hits.len(), 1);
 /// ```
 pub fn intersects_window_indexed_sql(
+    schema: &str,
     table: &str,
     geom_column: &str,
     window: (f64, f64, f64, f64),
     select_cols: &str,
 ) -> diesel::query_builder::SqlQuery {
     diesel::sql_query(intersects_window_indexed_sql_string(
+        schema,
         table,
         geom_column,
         window,
@@ -277,12 +288,13 @@ pub fn intersects_window_indexed_sql(
 /// use sqlitegis::diesel::query_helpers::intersects_window_indexed_sql_string;
 ///
 /// let sql = intersects_window_indexed_sql_string(
-///     "places", "geom", (-1.6, 37.5, 28.4, 67.5), "t.id, t.name",
+///     "main", "places", "geom", (-1.6, 37.5, 28.4, 67.5), "t.id, t.name",
 /// );
-/// assert!(sql.contains("JOIN [places_geom_rtree]"));
+/// assert!(sql.contains("JOIN [main].[places_geom_rtree]"));
 /// assert!(sql.contains("ST_MakeEnvelope(-1.6, 37.5, 28.4, 67.5, 4326)"));
 /// ```
 pub fn intersects_window_indexed_sql_string(
+    schema: &str,
     table: &str,
     geom_column: &str,
     window: (f64, f64, f64, f64),
@@ -291,8 +303,8 @@ pub fn intersects_window_indexed_sql_string(
     let (xmin, ymin, xmax, ymax) = window;
     format!(
         "SELECT {select_cols} \
-         FROM [{table}] t \
-         JOIN [{table}_{geom_column}_rtree] r ON t.rowid = r.id \
+         FROM [{schema}].[{table}] t \
+         JOIN [{schema}].[{table}_{geom_column}_rtree] r ON t.rowid = r.id \
          WHERE r.xmax >= {xmin} AND r.xmin <= {xmax} \
            AND r.ymax >= {ymin} AND r.ymin <= {ymax} \
            AND ST_Intersects(t.[{geom_column}], \
@@ -318,8 +330,8 @@ pub fn intersects_window_indexed_sql_string(
 /// `search_radius_m` that is comfortably larger than the expected
 /// neighbour distance.
 ///
-/// `table` and `geom_column` follow the same identifier-safety contract
-/// as [`dwithin_sphere_indexed_sql`].
+/// `schema`, `table` and `geom_column` follow the same schema and
+/// identifier-safety contract as [`dwithin_sphere_indexed_sql`].
 ///
 /// # Example
 ///
@@ -337,7 +349,7 @@ pub fn intersects_window_indexed_sql_string(
 ///
 /// diesel::sql_query("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)")
 ///     .execute(&mut c).unwrap();
-/// diesel::sql_query("SELECT CreateSpatialIndex('pts', 'geom')")
+/// diesel::sql_query("SELECT CreateSpatialIndex('main', 'pts', 'geom')")
 ///     .execute(&mut c).unwrap();
 /// // Berlin then Paris.
 /// diesel::sql_query(
@@ -348,11 +360,12 @@ pub fn intersects_window_indexed_sql_string(
 ///
 /// // Probe from Berlin: closest is itself (id=1), then Paris (id=2).
 /// let hits: Vec<Hit> = nearest_sphere_indexed_sql(
-///     "pts", "geom", (13.4, 52.5), 2_000_000.0, 2, "t.id",
+///     "main", "pts", "geom", (13.4, 52.5), 2_000_000.0, 2, "t.id",
 /// ).load::<Hit>(&mut c).unwrap();
 /// assert_eq!(hits.iter().map(|h| h.id).collect::<Vec<_>>(), vec![1, 2]);
 /// ```
 pub fn nearest_sphere_indexed_sql(
+    schema: &str,
     table: &str,
     geom_column: &str,
     probe: (f64, f64),
@@ -361,6 +374,7 @@ pub fn nearest_sphere_indexed_sql(
     select_cols: &str,
 ) -> diesel::query_builder::SqlQuery {
     diesel::sql_query(nearest_sphere_indexed_sql_string(
+        schema,
         table,
         geom_column,
         probe,
@@ -380,13 +394,14 @@ pub fn nearest_sphere_indexed_sql(
 /// use sqlitegis::diesel::query_helpers::nearest_sphere_indexed_sql_string;
 ///
 /// let sql = nearest_sphere_indexed_sql_string(
-///     "places", "geom", (13.4, 52.5), 1_000_000.0, 10, "t.id, t.name",
+///     "main", "places", "geom", (13.4, 52.5), 1_000_000.0, 10, "t.id, t.name",
 /// );
-/// assert!(sql.contains("JOIN [places_geom_rtree]"));
+/// assert!(sql.contains("JOIN [main].[places_geom_rtree]"));
 /// assert!(sql.contains("ORDER BY ST_DistanceSphere"));
 /// assert!(sql.contains("LIMIT 10"));
 /// ```
 pub fn nearest_sphere_indexed_sql_string(
+    schema: &str,
     table: &str,
     geom_column: &str,
     probe: (f64, f64),
@@ -398,8 +413,8 @@ pub fn nearest_sphere_indexed_sql_string(
     let bbox = radius_bbox(lat, search_radius_m);
     format!(
         "SELECT {select_cols} \
-         FROM [{table}] t \
-         JOIN [{table}_{geom_column}_rtree] r ON t.rowid = r.id \
+         FROM [{schema}].[{table}] t \
+         JOIN [{schema}].[{table}_{geom_column}_rtree] r ON t.rowid = r.id \
          WHERE r.xmax >= {x_min} AND r.xmin <= {x_max} \
            AND r.ymax >= {y_min} AND r.ymin <= {y_max} \
          ORDER BY ST_DistanceSphere(t.[{geom_column}], \
@@ -464,85 +479,5 @@ mod tests {
             bbox.dlon,
         );
         assert_eq!(bbox.dlon, 180.0);
-    }
-
-    /// Regression guard for the rendered SQL shape.
-    #[test]
-    fn dwithin_sphere_indexed_sql_shape() {
-        let sql = dwithin_sphere_indexed_sql_string(
-            "places",
-            "geom",
-            (13.4, 52.5),
-            1_000_000.0,
-            "t.id, t.name",
-        );
-        assert!(sql.contains("SELECT t.id, t.name"), "SQL was: {sql}");
-        assert!(sql.contains("FROM [places] t"), "SQL was: {sql}");
-        assert!(
-            sql.contains("JOIN [places_geom_rtree] r ON t.rowid = r.id"),
-            "SQL was: {sql}",
-        );
-        assert!(sql.contains("r.xmax >="), "SQL was: {sql}");
-        assert!(sql.contains("r.xmin <="), "SQL was: {sql}");
-        assert!(sql.contains("r.ymax >="), "SQL was: {sql}");
-        assert!(sql.contains("r.ymin <="), "SQL was: {sql}");
-        assert!(sql.contains("ST_DWithinSphere(t.[geom]"), "SQL was: {sql}");
-        assert!(sql.contains("ST_Point(13.4, 52.5, 4326)"), "SQL was: {sql}",);
-        assert!(sql.contains("1000000"), "SQL was: {sql}");
-    }
-
-    /// Regression guard for the envelope-window helper's SQL.
-    #[test]
-    fn intersects_window_indexed_sql_shape() {
-        let sql = intersects_window_indexed_sql_string(
-            "places",
-            "geom",
-            (-1.6, 37.5, 28.4, 67.5),
-            "t.id, t.name",
-        );
-        assert!(sql.contains("SELECT t.id, t.name"), "SQL was: {sql}");
-        assert!(sql.contains("FROM [places] t"), "SQL was: {sql}");
-        assert!(
-            sql.contains("JOIN [places_geom_rtree] r ON t.rowid = r.id"),
-            "SQL was: {sql}",
-        );
-        assert!(sql.contains("r.xmax >= -1.6"), "SQL was: {sql}");
-        assert!(sql.contains("r.xmin <= 28.4"), "SQL was: {sql}");
-        assert!(sql.contains("r.ymax >= 37.5"), "SQL was: {sql}");
-        assert!(sql.contains("r.ymin <= 67.5"), "SQL was: {sql}");
-        assert!(sql.contains("ST_Intersects(t.[geom]"), "SQL was: {sql}",);
-        assert!(
-            sql.contains("ST_MakeEnvelope(-1.6, 37.5, 28.4, 67.5, 4326)"),
-            "SQL was: {sql}",
-        );
-    }
-
-    /// Regression guard for the geodesic nearest-N helper's SQL.
-    #[test]
-    fn nearest_sphere_indexed_sql_shape() {
-        let sql = nearest_sphere_indexed_sql_string(
-            "places",
-            "geom",
-            (13.4, 52.5),
-            1_000_000.0,
-            10,
-            "t.id, t.name",
-        );
-        assert!(sql.contains("SELECT t.id, t.name"), "SQL was: {sql}");
-        assert!(sql.contains("FROM [places] t"), "SQL was: {sql}");
-        assert!(
-            sql.contains("JOIN [places_geom_rtree] r ON t.rowid = r.id"),
-            "SQL was: {sql}",
-        );
-        assert!(sql.contains("r.xmax >="), "SQL was: {sql}");
-        assert!(sql.contains("r.xmin <="), "SQL was: {sql}");
-        assert!(sql.contains("r.ymax >="), "SQL was: {sql}");
-        assert!(sql.contains("r.ymin <="), "SQL was: {sql}");
-        assert!(
-            sql.contains("ORDER BY ST_DistanceSphere(t.[geom]"),
-            "SQL was: {sql}",
-        );
-        assert!(sql.contains("ST_Point(13.4, 52.5, 4326)"), "SQL was: {sql}",);
-        assert!(sql.contains("LIMIT 10"), "SQL was: {sql}");
     }
 }

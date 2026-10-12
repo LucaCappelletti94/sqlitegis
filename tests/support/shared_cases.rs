@@ -2743,6 +2743,341 @@ fn spatial_index_rejects_colliding_create_when_owner_triggers_partially_removed(
     assert_eq!(trigger_count_on_a, 0);
 }
 
+/// `main.features` holds row 3 and `temp.features` holds row 9, both at the
+/// same point, so a capture across schemas shows up as the wrong id.
+fn seed_shadowed_features(db: &ActiveTestDb) {
+    db.exec("CREATE TABLE main.features (id INTEGER PRIMARY KEY, geom BLOB)");
+    db.exec("INSERT INTO main.features VALUES (3, ST_Point(0.5, 0.5))");
+    db.exec("CREATE TEMP TABLE features (id INTEGER PRIMARY KEY, geom BLOB)");
+    db.exec("INSERT INTO temp.features VALUES (9, ST_Point(0.5, 0.5))");
+}
+
+/// Counts the R-tree, its three shadow tables and the three maintenance
+/// triggers of the `features.geom` index stored in `schema`.
+fn features_index_objects(db: &ActiveTestDb, schema: &str) -> i64 {
+    db.query_i64(&format!(
+        "SELECT COUNT(*) FROM {schema}.sqlite_master WHERE name GLOB 'features_geom_*'"
+    ))
+}
+
+fn catalog_exists(db: &ActiveTestDb, schema: &str) -> bool {
+    db.query_i64(&format!(
+        "SELECT COUNT(*) FROM {schema}.sqlite_master \
+         WHERE type = 'table' AND name = 'sqlitegis_spatial_index_catalog'"
+    )) == 1
+}
+
+#[$test_attr]
+fn spatial_index_main_owner_ignores_temp_shadow() {
+    let db = ActiveTestDb::open();
+    seed_shadowed_features(&db);
+
+    let rc = db.query_i64("SELECT CreateSpatialIndex('main', 'features', 'geom')");
+    assert_eq!(rc, 1);
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM main.features_geom_rtree ORDER BY id"),
+        vec![3]
+    );
+    assert_eq!(
+        db.query_i64(
+            "SELECT COUNT(*) FROM main.sqlite_master \
+             WHERE type = 'trigger' AND tbl_name = 'features'"
+        ),
+        3
+    );
+    assert_eq!(features_index_objects(&db, "temp"), 0);
+    assert!(!catalog_exists(&db, "temp"));
+
+    db.exec("INSERT INTO main.features VALUES (4, ST_Point(1, 1))");
+    db.exec("INSERT INTO temp.features VALUES (10, ST_Point(1, 1))");
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM main.features_geom_rtree ORDER BY id"),
+        vec![3, 4]
+    );
+
+    db.exec("UPDATE main.features SET geom = ST_Point(5, 5) WHERE id = 3");
+    db.exec("UPDATE temp.features SET geom = ST_Point(7, 7) WHERE id = 9");
+    let xmin = db.query_f64("SELECT xmin FROM main.features_geom_rtree WHERE id = 3");
+    assert!((xmin - 5.0).abs() < 1e-6, "xmin = {xmin}");
+
+    db.exec("DELETE FROM temp.features WHERE id = 10");
+    db.exec("DELETE FROM main.features WHERE id = 4");
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM main.features_geom_rtree ORDER BY id"),
+        vec![3]
+    );
+
+    let rc = db.query_i64("SELECT CreateSpatialIndex('main', 'features', 'geom')");
+    assert_eq!(rc, 1);
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM main.features_geom_rtree ORDER BY id"),
+        vec![3],
+        "recreation must rebuild from main.features only"
+    );
+
+    let rc = db.query_i64("SELECT DropSpatialIndex('main', 'features', 'geom')");
+    assert_eq!(rc, 1);
+    assert_eq!(features_index_objects(&db, "main"), 0);
+    assert_eq!(
+        db.query_i64("SELECT COUNT(*) FROM main.sqlitegis_spatial_index_catalog"),
+        0
+    );
+    assert_eq!(db.query_i64("SELECT COUNT(*) FROM temp.features"), 1);
+}
+
+#[$test_attr]
+fn spatial_index_temp_owner_ignores_main_table() {
+    let db = ActiveTestDb::open();
+    seed_shadowed_features(&db);
+
+    let rc = db.query_i64("SELECT CreateSpatialIndex('temp', 'features', 'geom')");
+    assert_eq!(rc, 1);
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM temp.features_geom_rtree ORDER BY id"),
+        vec![9]
+    );
+    assert_eq!(features_index_objects(&db, "main"), 0);
+    assert!(!catalog_exists(&db, "main"));
+    assert_eq!(
+        db.query_i64(
+            "SELECT COUNT(*) FROM temp.sqlitegis_spatial_index_catalog \
+             WHERE table_name = 'features' AND column_name = 'geom'"
+        ),
+        1
+    );
+
+    db.exec("INSERT INTO main.features VALUES (4, ST_Point(1, 1))");
+    db.exec("INSERT INTO temp.features VALUES (10, ST_Point(1, 1))");
+    db.exec("UPDATE temp.features SET id = 11 WHERE id = 9");
+    db.exec("DELETE FROM main.features WHERE id = 3");
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM temp.features_geom_rtree ORDER BY id"),
+        vec![10, 11]
+    );
+
+    let rc = db.query_i64("SELECT DropSpatialIndex('temp', 'features', 'geom')");
+    assert_eq!(rc, 1);
+    assert_eq!(features_index_objects(&db, "temp"), 0);
+    assert_eq!(features_index_objects(&db, "main"), 0);
+}
+
+#[$test_attr]
+fn spatial_index_main_and_temp_owners_coexist() {
+    let db = ActiveTestDb::open();
+    seed_shadowed_features(&db);
+
+    assert_eq!(
+        db.query_i64("SELECT CreateSpatialIndex('main', 'features', 'geom')"),
+        1
+    );
+    assert_eq!(
+        db.query_i64("SELECT CreateSpatialIndex('temp', 'features', 'geom')"),
+        1
+    );
+
+    db.exec("INSERT INTO main.features VALUES (4, ST_Point(1, 1))");
+    db.exec("INSERT INTO temp.features VALUES (10, ST_Point(1, 1))");
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM main.features_geom_rtree ORDER BY id"),
+        vec![3, 4]
+    );
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM temp.features_geom_rtree ORDER BY id"),
+        vec![9, 10]
+    );
+
+    assert_eq!(
+        db.query_i64("SELECT DropSpatialIndex('temp', 'features', 'geom')"),
+        1
+    );
+    assert_eq!(features_index_objects(&db, "temp"), 0);
+    assert_eq!(features_index_objects(&db, "main"), 7);
+    db.exec("INSERT INTO main.features VALUES (5, ST_Point(2, 2))");
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM main.features_geom_rtree ORDER BY id"),
+        vec![3, 4, 5]
+    );
+}
+
+#[$test_attr]
+fn spatial_index_bare_name_resolves_temp_before_main() {
+    let db = ActiveTestDb::open();
+    seed_shadowed_features(&db);
+
+    assert_eq!(
+        db.query_i64("SELECT CreateSpatialIndex('features', 'geom')"),
+        1
+    );
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM temp.features_geom_rtree ORDER BY id"),
+        vec![9]
+    );
+    assert_eq!(features_index_objects(&db, "main"), 0);
+
+    // Dropping the temp table removes its triggers but leaves the R-tree and
+    // catalogue row behind, so the bare name now reaches main.features.
+    db.exec("DROP TABLE temp.features");
+    assert_eq!(
+        db.query_i64("SELECT CreateSpatialIndex('features', 'geom')"),
+        1
+    );
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM main.features_geom_rtree ORDER BY id"),
+        vec![3]
+    );
+
+    // The bare drop reaches the first schema still holding the index, temp.
+    assert_eq!(
+        db.query_i64("SELECT DropSpatialIndex('features', 'geom')"),
+        1
+    );
+    assert_eq!(features_index_objects(&db, "temp"), 0);
+    assert_eq!(features_index_objects(&db, "main"), 7);
+
+    assert_eq!(
+        db.query_i64("SELECT DropSpatialIndex('features', 'geom')"),
+        1
+    );
+    assert_eq!(features_index_objects(&db, "main"), 0);
+
+    assert_eq!(
+        db.query_i64("SELECT DropSpatialIndex('features', 'geom')"),
+        1,
+        "a bare drop with nothing left is a no-op"
+    );
+}
+
+#[$test_attr]
+fn spatial_index_attached_schema_owner() {
+    let db = ActiveTestDb::open();
+    db.exec("ATTACH DATABASE ':memory:' AS aux");
+    db.exec("CREATE TABLE main.features (id INTEGER PRIMARY KEY, geom BLOB)");
+    db.exec("INSERT INTO main.features VALUES (3, ST_Point(0.5, 0.5))");
+    db.exec("CREATE TABLE aux.features (id INTEGER PRIMARY KEY, geom BLOB)");
+    db.exec("INSERT INTO aux.features VALUES (5, ST_Point(0.5, 0.5))");
+
+    assert_eq!(
+        db.query_i64("SELECT CreateSpatialIndex('aux', 'features', 'geom')"),
+        1
+    );
+    db.exec("INSERT INTO aux.features VALUES (6, ST_Point(1, 1))");
+    db.exec("INSERT INTO main.features VALUES (4, ST_Point(1, 1))");
+    assert_eq!(
+        db.query_all_i64("SELECT id FROM aux.features_geom_rtree ORDER BY id"),
+        vec![5, 6]
+    );
+    assert_eq!(features_index_objects(&db, "main"), 0);
+    assert!(!catalog_exists(&db, "main"));
+
+    assert_eq!(
+        db.query_i64("SELECT DropSpatialIndex('aux', 'features', 'geom')"),
+        1
+    );
+    assert_eq!(features_index_objects(&db, "aux"), 0);
+}
+
+#[$test_attr]
+fn spatial_index_rejects_unusable_owner_schema() {
+    let db = ActiveTestDb::open();
+    seed_shadowed_features(&db);
+
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex('nope', 'features', 'geom')")
+        .expect_err("an unattached schema must be rejected");
+    assert!(err.contains("unknown schema [nope]"), "unexpected error: {err}");
+
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex('ma in', 'features', 'geom')")
+        .expect_err("a schema name outside [a-zA-Z0-9_] must be rejected");
+    assert!(err.contains("invalid schema name"), "unexpected error: {err}");
+
+    let err = db
+        .try_query_i64("SELECT DropSpatialIndex('nope', 'features', 'geom')")
+        .expect_err("drop must reject an unattached schema too");
+    assert!(err.contains("unknown schema [nope]"), "unexpected error: {err}");
+
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex('missing', 'geom')")
+        .expect_err("a bare name matching no table must be rejected");
+    assert!(err.contains("no such table [missing]"), "unexpected error: {err}");
+
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex('temp', 'missing', 'geom')")
+        .expect_err("a named schema without the table must be rejected");
+    assert!(
+        err.contains("no such table [temp].[missing]"),
+        "unexpected error: {err}"
+    );
+
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex(CAST(X'FF' AS TEXT), 'features', 'geom')")
+        .expect_err("a schema name that is not UTF-8 must be rejected");
+    assert!(
+        err.contains("schema name must be valid UTF-8 text"),
+        "unexpected error: {err}"
+    );
+
+    db.exec("DROP TABLE temp.features");
+    db.exec("CREATE TEMP VIEW features AS SELECT 1 AS id, NULL AS geom");
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex('features', 'geom')")
+        .expect_err("a bare name reaching a view must not fall through to main");
+    assert!(
+        err.contains("[temp].[features] is not a table"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(features_index_objects(&db, "main"), 0);
+    assert_eq!(features_index_objects(&db, "temp"), 0);
+
+    let rc = db.query_i64("SELECT DropSpatialIndex('temp', 'features', 'geom')");
+    assert_eq!(rc, 1, "dropping an absent index is a no-op");
+    assert!(!catalog_exists(&db, "temp"), "drop must not create a catalogue");
+}
+
+#[$test_attr]
+fn spatial_index_rejects_plain_table_with_rtree_name() {
+    let db = ActiveTestDb::open();
+    db.exec("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)");
+    db.exec("CREATE TABLE pts_geom_rtree (id INTEGER PRIMARY KEY)");
+
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex('pts', 'geom')")
+        .expect_err("a plain table squatting the R-tree name must not be adopted");
+    assert!(
+        err.contains(
+            "existing table [main].[pts_geom_rtree] is not an R-tree index managed by SQLiteGIS"
+        ),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        db.query_i64("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'"),
+        0
+    );
+}
+
+#[$test_attr]
+fn spatial_index_rejects_catalog_row_without_column() {
+    let db = ActiveTestDb::open();
+    db.exec("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)");
+    db.exec(
+        "CREATE TABLE sqlitegis_spatial_index_catalog \
+         (prefix TEXT PRIMARY KEY, table_name TEXT, column_name TEXT)",
+    );
+    db.exec("INSERT INTO sqlitegis_spatial_index_catalog VALUES ('pts_geom', 'pts', NULL)");
+
+    let err = db
+        .try_query_i64("SELECT CreateSpatialIndex('pts', 'geom')")
+        .expect_err("an incomplete catalogue row must not be read as ownership");
+    assert!(
+        err.contains("catalog row for prefix [pts_geom] is missing column_name"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        db.query_i64("SELECT COUNT(*) FROM sqlite_master WHERE name GLOB 'pts_geom_*'"),
+        0
+    );
+}
+
 #[$test_attr]
 fn spatial_index_drop_rejects_colliding_drop_when_all_owner_triggers_removed() {
     let db = ActiveTestDb::open();
@@ -2859,7 +3194,7 @@ fn spatial_index_drop_idempotent() {
 }
 
 #[$test_attr]
-fn spatial_index_fresh_db_drop_creates_empty_catalog_and_succeeds() {
+fn spatial_index_fresh_db_drop_is_a_noop() {
     let db = ActiveTestDb::open();
     db.exec("CREATE TABLE pts (id INTEGER PRIMARY KEY, geom BLOB)");
 
@@ -2870,13 +3205,7 @@ fn spatial_index_fresh_db_drop_creates_empty_catalog_and_succeeds() {
         "SELECT COUNT(*) FROM sqlite_master \
          WHERE type = 'table' AND name = 'sqlitegis_spatial_index_catalog'",
     );
-    assert_eq!(
-        catalog_exists, 1,
-        "drop on a fresh DB should lazily create the catalog table"
-    );
-
-    let catalog_rows = db.query_i64("SELECT COUNT(*) FROM sqlitegis_spatial_index_catalog");
-    assert_eq!(catalog_rows, 0, "fresh drop should leave an empty catalog");
+    assert_eq!(catalog_exists, 0, "drop must not create a catalog table");
 
     let managed_objects = db.query_i64(
         "SELECT COUNT(*) FROM sqlite_master \

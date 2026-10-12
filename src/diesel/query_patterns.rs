@@ -18,6 +18,15 @@
 //! - Ownership markers are persisted in `sqlitegis_spatial_index_catalog`.
 //!   Helpers fail closed if managed objects exist but ownership markers are
 //!   missing or externally modified.
+//! - Every one of these objects lives in the schema of the indexed table,
+//!   as a PostgreSQL index lives in its table's schema. The three-argument
+//!   forms `CreateSpatialIndex('main', 'my_table', 'geom')` and
+//!   `DropSpatialIndex('temp', 'my_table', 'geom')` name that schema, which
+//!   is `main`, `temp` or an attached schema. The two-argument forms find
+//!   the table the way SQLite resolves an unqualified name, temp first, then
+//!   main, then attached schemas, and `DropSpatialIndex` picks the first of
+//!   those schemas still holding the index. A temp table therefore shadows
+//!   a main table of the same name, and both can carry their own index.
 //! - Index lifecycle stays on the raw SQL path (`diesel::sql_query`) on
 //!   purpose. No typed wrappers are exported in
 //!   `sqlitegis::diesel::functions` for these two lifecycle helpers.
@@ -134,7 +143,7 @@
 //!
 //! // R-tree-backed bbox prefilter + ST_Intersects refinement in one call.
 //! let hits: Vec<Hit> = intersects_window_indexed_sql(
-//!     "pts", "geom", (-1.6, 37.5, 28.4, 67.5), "t.id",
+//!     "main", "pts", "geom", (-1.6, 37.5, 28.4, 67.5), "t.id",
 //! ).load::<Hit>(&mut c).unwrap();
 //! assert_eq!(hits.len(), 1);
 //! ```
@@ -376,7 +385,7 @@
 //!
 //! // R-tree bbox prefilter + ST_DWithinSphere geodesic refinement.
 //! let hits: Vec<Hit> = dwithin_sphere_indexed_sql(
-//!     "pts", "geom", (13.4, 52.5), 100_000.0, "t.id",
+//!     "main", "pts", "geom", (13.4, 52.5), 100_000.0, "t.id",
 //! ).load::<Hit>(&mut c).unwrap();
 //! assert_eq!(hits.len(), 1);
 //! ```
@@ -586,7 +595,7 @@
 //! // Bbox prefilter + ORDER BY ST_DistanceSphere LIMIT N. Closest to
 //! // Berlin is itself, then Paris.
 //! let hits: Vec<Hit> = nearest_sphere_indexed_sql(
-//!     "pts", "geom", (13.4, 52.5), 2_000_000.0, 2, "t.id",
+//!     "main", "pts", "geom", (13.4, 52.5), 2_000_000.0, 2, "t.id",
 //! ).load::<Hit>(&mut c).unwrap();
 //! assert_eq!(hits.iter().map(|h| h.id).collect::<Vec<_>>(), vec![1, 2]);
 //! ```
