@@ -1,0 +1,1 @@
+{"type": "GeometryCollection", "geometries": [{"type": "Point", "coordinates": [0,0]},{"type": "Polygon", "coordinates": [[[1,1]]]},{"type": "Mutring", "type": "Polygon", "coordinates": [[[0,0],[1,0],[1,1]]]},{}]}
