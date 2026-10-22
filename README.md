@@ -1,11 +1,11 @@
 # SQLiteGIS
 
-[![CI](https://github.com/LucaCappelletti94/sqlitegis/actions/workflows/ci.yml/badge.svg)](https://github.com/LucaCappelletti94/sqlitegis/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/LucaCappelletti94/sqlitegis/graph/badge.svg)](https://codecov.io/gh/LucaCappelletti94/sqlitegis)
+[![CI](https://github.com/connetto-rs/sqlitegis/actions/workflows/ci.yml/badge.svg)](https://github.com/connetto-rs/sqlitegis/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/connetto-rs/sqlitegis/graph/badge.svg)](https://codecov.io/gh/connetto-rs/sqlitegis)
 [![crates.io](https://img.shields.io/crates/v/sqlitegis.svg)](https://crates.io/crates/sqlitegis)
 [![docs.rs](https://img.shields.io/docsrs/sqlitegis)](https://docs.rs/sqlitegis)
-[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue)](https://github.com/LucaCappelletti94/sqlitegis)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/LucaCappelletti94/sqlitegis/blob/main/LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue)](https://github.com/connetto-rs/sqlitegis)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/connetto-rs/sqlitegis/blob/main/LICENSE)
 
 [PostGIS](https://postgis.net/)-style spatial functions for [SQLite](https://www.sqlite.org/) in pure [Rust](https://www.rust-lang.org/), primarily a [Diesel](https://diesel.rs/) ORM integration. Geometries travel as [EWKB](https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry#Well-known_binary) BLOBs, matching the PostGIS wire format so queries port between SQLite and PostGIS without rewriting. The same functions are also exposed as a SQLite loadable extension (native and [WebAssembly](https://webassembly.org/)) for non-Rust consumers like the SQLite CLI. Try the [live demo](https://sqlitegis.luca.phd/) to run spatial SQL against 68k cities entirely in the browser.
 
@@ -80,11 +80,11 @@ Every measure and transform that depends on the shape of the earth comes in thre
 
 ## Benchmarks
 
-See [BENCHMARKS.md](https://github.com/LucaCappelletti94/sqlitegis/blob/main/BENCHMARKS.md) for the full R-tree and SpatiaLite comparison reports. Headline: on a 50k-row dataset across 36 head-to-head workloads, sqlitegis wins 25 (curved-earth family 1.9x to 7.7x faster, binary predicates 1.2x to 1.7x via an MBR-only fastpath, I/O parse paths 2x faster) and loses 11 (`ST_Envelope`, `ST_AsBinary`, and the per-row scalar accessors `ST_X`/`ST_Y`/`ST_Area`/`ST_Perimeter` go through full EWKB decode where SpatiaLite has thin-C-wrapper shortcuts).
+See [BENCHMARKS.md](https://github.com/connetto-rs/sqlitegis/blob/main/BENCHMARKS.md) for the full R-tree and SpatiaLite comparison reports. Headline: on a 50k-row dataset across 36 head-to-head workloads, sqlitegis wins 25 (curved-earth family 1.9x to 7.7x faster, binary predicates 1.2x to 1.7x via an MBR-only fastpath, I/O parse paths 2x faster) and loses 11 (`ST_Envelope`, `ST_AsBinary`, and the per-row scalar accessors `ST_X`/`ST_Y`/`ST_Area`/`ST_Perimeter` go through full EWKB decode where SpatiaLite has thin-C-wrapper shortcuts).
 
 ## Contributing
 
-See [CONTRIBUTING.md](https://github.com/LucaCappelletti94/sqlitegis/blob/main/CONTRIBUTING.md).
+See [CONTRIBUTING.md](https://github.com/connetto-rs/sqlitegis/blob/main/CONTRIBUTING.md).
 
 ## License
 
