@@ -130,7 +130,7 @@ fn App() -> Element {
                     }
                     nav { class: "quick-links", aria_label: "Project resources",
                         a {
-                            href: "https://github.com/LucaCappelletti94/sqlitegis",
+                            href: "https://github.com/connetto-rs/sqlitegis",
                             rel: "noopener",
                             target: "_blank",
                             title: "GitHub repository",
