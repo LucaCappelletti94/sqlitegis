@@ -55,6 +55,10 @@ diesel-postgres = ["diesel", "diesel/postgres"]
 # a no-op.
 bundled-sqlite = ["libsqlite3-sys?/bundled"]
 
+# Serde support for the re-exported `geo` types and the diesel geometry and
+# geography value types.
+serde = ["dep:serde", "geo/use-serde"]
+
 # Opt-in flag for the SpatiaLite comparison benchmark. Off by default so
 # the CI matrix does not need SpatiaLite installed. See the [[bench]]
 # entry at the bottom of this file for run instructions.
@@ -67,6 +71,7 @@ geozero = { version = "0.15", features = ["with-wkt", "with-geojson", "with-svg"
 thiserror = "2"
 serde_json = "1"
 diesel = { version = "2", default-features = false, optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 libsqlite3-sys = { workspace = true, features = ["bundled_bindings"], optional = true }
