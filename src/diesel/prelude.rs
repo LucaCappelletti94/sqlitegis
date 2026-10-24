@@ -16,4 +16,4 @@ pub use crate::diesel::query_helpers::{
     intersects_window_indexed_sql_string, nearest_sphere_indexed_sql,
     nearest_sphere_indexed_sql_string, radius_bbox, RadiusBbox,
 };
-pub use crate::diesel::types::{Geography, Geometry};
+pub use crate::diesel::types::{Geography, GeographyValue, Geometry, GeometryValue};

@@ -28,6 +28,8 @@
 pub mod core;
 #[doc(inline)]
 pub use core::error::{Result, SqliteGisError};
+/// The `geo` crate whose types this crate reads and writes.
+pub use geo;
 
 #[cfg(feature = "sqlite")]
 pub mod sqlite;

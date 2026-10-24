@@ -1009,3 +1009,66 @@ fn debug_query_st_closestpoint() {
         "st_closestpoint"
     );
 }
+
+// Geometry and geography values in NOT NULL columns
+
+diesel::table! {
+    required_shapes (id) {
+        id -> Integer,
+        geom -> sqlitegis::diesel::Geometry,
+        geog -> sqlitegis::diesel::Geography,
+    }
+}
+
+fn required_shapes_conn() -> SqliteConnection {
+    use diesel::connection::SimpleConnection;
+
+    let mut c = SqliteConnection::establish(":memory:").unwrap();
+    c.batch_execute(
+        "CREATE TABLE required_shapes (id INTEGER PRIMARY KEY, geom BLOB NOT NULL, geog BLOB NOT NULL)",
+    )
+    .unwrap();
+    c
+}
+
+#[test]
+fn geometry_and_geography_values_roundtrip_through_not_null_columns() {
+    use sqlitegis::diesel::{GeographyValue, GeometryValue};
+
+    let mut c = required_shapes_conn();
+    let point = geo::Geometry::Point(geo::Point::new(13.4, 52.5));
+    let geometry = GeometryValue::from(point.clone());
+    let geography = GeographyValue::from(point);
+
+    diesel::insert_into(required_shapes::table)
+        .values((
+            required_shapes::id.eq(1),
+            required_shapes::geom.eq(&geometry),
+            required_shapes::geog.eq(&geography),
+        ))
+        .execute(&mut c)
+        .unwrap();
+
+    let (geom, geog): (GeometryValue, GeographyValue) = required_shapes::table
+        .filter(required_shapes::geom.eq(&geometry))
+        .filter(required_shapes::geog.eq(&geography))
+        .select((required_shapes::geom, required_shapes::geog))
+        .first(&mut c)
+        .unwrap();
+    assert_eq!(geom, geometry);
+    assert_eq!(geog, geography);
+
+    let (geom_blob, geog_blob): (Vec<u8>, Vec<u8>) = required_shapes::table
+        .find(1)
+        .select((required_shapes::geom, required_shapes::geog))
+        .first(&mut c)
+        .unwrap();
+    assert_eq!(
+        sqlitegis::core::ewkb::parse_ewkb(&geom_blob).unwrap().1,
+        None
+    );
+    assert_eq!(
+        sqlitegis::core::ewkb::parse_ewkb(&geog_blob).unwrap().1,
+        Some(4326)
+    );
+}

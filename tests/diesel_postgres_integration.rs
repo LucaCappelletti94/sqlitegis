@@ -20,6 +20,14 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    required_shapes (id) {
+        id -> diesel::sql_types::Integer,
+        geom -> sqlitegis::diesel::types::Geometry,
+        geog -> sqlitegis::diesel::types::Geography,
+    }
+}
+
 // Helper: start a PostGIS container and return (container, connection)
 
 async fn pg_conn(
@@ -82,6 +90,11 @@ async fn pg_conn(
             id   SERIAL PRIMARY KEY,
             geom geometry,
             geog geography
+        );
+        CREATE TABLE required_shapes (
+            id   SERIAL PRIMARY KEY,
+            geom geometry NOT NULL,
+            geog geography NOT NULL
         );
         ",
     )
@@ -247,6 +260,35 @@ macro_rules! postgis_tests {
                 let null_geom: Option<Vec<u8>> =
                     t::table.find(id).select(t::geom).first(&mut c).unwrap();
                 assert!(null_geom.is_none());
+            }
+
+            #[tokio::test]
+            async fn geometry_and_geography_values_roundtrip_through_not_null_columns() {
+                use sqlitegis::diesel::{GeographyValue, GeometryValue};
+
+                let (_container, mut c) = pg_conn($tag).await;
+
+                for (id, (type_name, geom)) in (1..).zip(geometry_samples()) {
+                    let geometry = GeometryValue::from(geom.clone());
+                    let geography = GeographyValue::from(geom);
+                    diesel::insert_into(required_shapes::table)
+                        .values((
+                            required_shapes::id.eq(id),
+                            required_shapes::geom.eq(&geometry),
+                            required_shapes::geog.eq(&geography),
+                        ))
+                        .execute(&mut c)
+                        .unwrap();
+
+                    let (geom, geog): (GeometryValue, GeographyValue) = required_shapes::table
+                        .filter(required_shapes::id.eq(id))
+                        .filter(required_shapes::geom.eq(&geometry))
+                        .select((required_shapes::geom, required_shapes::geog))
+                        .first(&mut c)
+                        .unwrap();
+                    assert_eq!(geom, geometry, "GeometryValue roundtrip failed for {type_name}");
+                    assert_eq!(geog, geography, "GeographyValue roundtrip failed for {type_name}");
+                }
             }
 
             // -- 2. PostGIS I/O functions ---------------------------------

@@ -22,4 +22,4 @@ pub use query_helpers::{
     nearest_sphere_indexed_sql_string, radius_bbox, RadiusBbox,
 };
 #[doc(inline)]
-pub use types::{Geography, Geometry};
+pub use types::{Geography, GeographyValue, Geometry, GeometryValue};

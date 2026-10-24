@@ -32,6 +32,109 @@ pub struct Geometry;
 #[diesel(postgres_type(name = "geography"))]
 pub struct Geography;
 
+/// Defines a [`geo::Geometry<f64>`] wrapper bound to one spatial SQL type.
+macro_rules! geo_value {
+    ($(#[$meta:meta])* $name:ident, $sql_type:ident) => {
+        $(#[$meta])*
+        #[derive(
+            Debug, Clone, PartialEq, diesel::expression::AsExpression, diesel::deserialize::FromSqlRow,
+        )]
+        #[diesel(sql_type = $sql_type)]
+        #[cfg_attr(
+            feature = "serde",
+            derive(serde::Serialize, serde::Deserialize),
+            serde(transparent)
+        )]
+        pub struct $name(pub geo::Geometry<f64>);
+
+        impl From<geo::Geometry<f64>> for $name {
+            fn from(geometry: geo::Geometry<f64>) -> Self {
+                Self(geometry)
+            }
+        }
+    };
+}
+
+geo_value!(
+    /// A [`geo::Geometry<f64>`] bindable to [`Geometry`] columns, nullable or
+    /// NOT NULL. It is written without an SRID and read whatever its SRID.
+    ///
+    /// ```rust
+    /// use diesel::prelude::*;
+    /// use sqlitegis::diesel::GeometryValue;
+    ///
+    /// diesel::table! {
+    ///     parcels (id) {
+    ///         id    -> Integer,
+    ///         shape -> sqlitegis::diesel::Geometry,
+    ///     }
+    /// }
+    ///
+    /// let corner = GeometryValue::from(geo::Geometry::Point(geo::Point::new(1.0, 2.0)));
+    /// let _insert = diesel::insert_into(parcels::table).values(parcels::shape.eq(&corner));
+    /// assert_eq!(corner.0, geo::Geometry::Point(geo::Point::new(1.0, 2.0)));
+    /// ```
+    ///
+    /// A [`Geography`] column rejects it at compile time.
+    ///
+    /// ```compile_fail
+    /// use diesel::prelude::*;
+    /// use sqlitegis::diesel::GeometryValue;
+    ///
+    /// diesel::table! {
+    ///     places (id) {
+    ///         id       -> Integer,
+    ///         location -> sqlitegis::diesel::Geography,
+    ///     }
+    /// }
+    ///
+    /// let corner = GeometryValue::from(geo::Geometry::Point(geo::Point::new(1.0, 2.0)));
+    /// let _insert = diesel::insert_into(places::table).values(places::location.eq(&corner));
+    /// ```
+    GeometryValue,
+    Geometry
+);
+
+geo_value!(
+    /// A [`geo::Geometry<f64>`] bindable to [`Geography`] columns, nullable or
+    /// NOT NULL. It is written with SRID 4326 and reading it requires SRID 4326.
+    ///
+    /// ```rust
+    /// use diesel::prelude::*;
+    /// use sqlitegis::diesel::GeographyValue;
+    ///
+    /// diesel::table! {
+    ///     places (id) {
+    ///         id       -> Integer,
+    ///         location -> sqlitegis::diesel::Geography,
+    ///     }
+    /// }
+    ///
+    /// let berlin = GeographyValue::from(geo::Geometry::Point(geo::Point::new(13.4, 52.5)));
+    /// let _insert = diesel::insert_into(places::table).values(places::location.eq(&berlin));
+    /// assert_eq!(berlin.0, geo::Geometry::Point(geo::Point::new(13.4, 52.5)));
+    /// ```
+    ///
+    /// A [`Geometry`] column rejects it at compile time.
+    ///
+    /// ```compile_fail
+    /// use diesel::prelude::*;
+    /// use sqlitegis::diesel::GeographyValue;
+    ///
+    /// diesel::table! {
+    ///     parcels (id) {
+    ///         id    -> Integer,
+    ///         shape -> sqlitegis::diesel::Geometry,
+    ///     }
+    /// }
+    ///
+    /// let berlin = GeographyValue::from(geo::Geometry::Point(geo::Point::new(13.4, 52.5)));
+    /// let _insert = diesel::insert_into(parcels::table).values(parcels::shape.eq(&berlin));
+    /// ```
+    GeographyValue,
+    Geography
+);
+
 #[cfg(any(feature = "diesel-sqlite", feature = "diesel-postgres"))]
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -112,7 +215,7 @@ mod sqlite_impls {
     // 4326 on write and requires 4326 on read.
 
     macro_rules! impl_geo_geometry_sqlite {
-        ($sql_type:ty, $srid:expr) => {
+        ($sql_type:ty, $value:ident, $srid:expr) => {
             impl FromSql<$sql_type, Sqlite> for geo::Geometry<f64> {
                 fn from_sql(
                     bytes: <Sqlite as diesel::backend::Backend>::RawValue<'_>,
@@ -130,11 +233,25 @@ mod sqlite_impls {
                     Ok(IsNull::No)
                 }
             }
+
+            impl FromSql<$sql_type, Sqlite> for $value {
+                fn from_sql(
+                    bytes: <Sqlite as diesel::backend::Backend>::RawValue<'_>,
+                ) -> deserialize::Result<Self> {
+                    <geo::Geometry<f64> as FromSql<$sql_type, Sqlite>>::from_sql(bytes).map($value)
+                }
+            }
+
+            impl ToSql<$sql_type, Sqlite> for $value {
+                fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Sqlite>) -> serialize::Result {
+                    <geo::Geometry<f64> as ToSql<$sql_type, Sqlite>>::to_sql(&self.0, out)
+                }
+            }
         };
     }
 
-    impl_geo_geometry_sqlite!(Geometry, None);
-    impl_geo_geometry_sqlite!(Geography, Some(4326));
+    impl_geo_geometry_sqlite!(Geometry, GeometryValue, None);
+    impl_geo_geometry_sqlite!(Geography, GeographyValue, Some(4326));
 }
 
 // PostgreSQL FromSql / ToSql
@@ -187,7 +304,7 @@ mod postgres_impls {
     // the SRID arg passed to parse_blob_with_srid_constraint / write_ewkb.
 
     macro_rules! impl_geo_geometry_pg {
-        ($sql_type:ty, $srid:expr) => {
+        ($sql_type:ty, $value:ident, $srid:expr) => {
             impl FromSql<$sql_type, Pg> for geo::Geometry<f64> {
                 fn from_sql(
                     bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
@@ -205,9 +322,23 @@ mod postgres_impls {
                     Ok(IsNull::No)
                 }
             }
+
+            impl FromSql<$sql_type, Pg> for $value {
+                fn from_sql(
+                    bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
+                ) -> deserialize::Result<Self> {
+                    <geo::Geometry<f64> as FromSql<$sql_type, Pg>>::from_sql(bytes).map($value)
+                }
+            }
+
+            impl ToSql<$sql_type, Pg> for $value {
+                fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
+                    <geo::Geometry<f64> as ToSql<$sql_type, Pg>>::to_sql(&self.0, out)
+                }
+            }
         };
     }
 
-    impl_geo_geometry_pg!(Geometry, None);
-    impl_geo_geometry_pg!(Geography, Some(4326));
+    impl_geo_geometry_pg!(Geometry, GeometryValue, None);
+    impl_geo_geometry_pg!(Geography, GeographyValue, Some(4326));
 }
