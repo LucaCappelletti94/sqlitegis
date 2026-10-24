@@ -326,6 +326,7 @@ pub fn st_line_substring_spheroid(blob: &[u8], start: f64, end: f64) -> Result<V
 mod tests {
     use super::*;
     use crate::core::functions::io::{as_text, geom_from_text};
+    use crate::core::functions::test_support::assert_wkt_close;
 
     /// Reference values are PostGIS 3.5 readings for the same line, taken
     /// through `geometry` for the planar form and through `geography` with
@@ -338,26 +339,6 @@ mod tests {
 
     fn wkt(blob: &[u8]) -> String {
         as_text(blob).unwrap()
-    }
-
-    /// Compare against a PostGIS reading to 9 decimal places of longitude and
-    /// latitude, which is well under a millimetre and far tighter than the
-    /// difference between the earth models under test.
-    fn assert_wkt_close(got: &str, want: &str) {
-        let nums = |s: &str| -> Vec<f64> {
-            s.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e'))
-                .filter(|t| !t.is_empty())
-                .filter_map(|t| t.parse::<f64>().ok())
-                .collect()
-        };
-        let (g, w) = (nums(got), nums(want));
-        assert_eq!(g.len(), w.len(), "shape differs: got {got}, want {want}");
-        for (a, b) in g.iter().zip(w.iter()) {
-            assert!(
-                (a - b).abs() < 1e-9,
-                "got {got}, want {want} (differ at {a} vs {b})"
-            );
-        }
     }
 
     #[test]
