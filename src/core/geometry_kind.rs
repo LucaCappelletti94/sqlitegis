@@ -1,4 +1,4 @@
-//! The `geo` types a geometry value can hold: any [`Geometry`] or one of its
+//! The `geo` types a geometry value can hold: any [`Geometry`](geo::Geometry) or one of its
 //! variants, matching PostGIS columns typed `geometry(Point)`,
 //! `geometry(Polygon)` and so on.
 
