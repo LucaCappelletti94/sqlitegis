@@ -13,3 +13,6 @@ pub mod function_catalog;
 /// Pure-Rust implementations of the spatial functions in the catalog,
 /// operating on EWKB BLOBs and primitive scalars.
 pub mod functions;
+/// The `geo` types geometry values hold, any geometry or one of its
+/// variants.
+pub mod geometry_kind;

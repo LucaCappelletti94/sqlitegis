@@ -28,6 +28,14 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    typed_shapes (id) {
+        id -> diesel::sql_types::Integer,
+        location -> sqlitegis::diesel::types::Geometry,
+        area -> sqlitegis::diesel::types::Geography,
+    }
+}
+
 // Helper: start a PostGIS container and return (container, connection)
 
 async fn pg_conn(
@@ -95,6 +103,11 @@ async fn pg_conn(
             id   SERIAL PRIMARY KEY,
             geom geometry NOT NULL,
             geog geography NOT NULL
+        );
+        CREATE TABLE typed_shapes (
+            id       SERIAL PRIMARY KEY,
+            location geometry(Point, 3857) NOT NULL,
+            area     geography(Polygon) NOT NULL
         );
         ",
     )
@@ -289,6 +302,55 @@ macro_rules! postgis_tests {
                     assert_eq!(geom, geometry, "GeometryValue roundtrip failed for {type_name}");
                     assert_eq!(geog, geography, "GeographyValue roundtrip failed for {type_name}");
                 }
+            }
+
+            #[tokio::test]
+            async fn narrowed_values_fill_typmod_columns() {
+                use sqlitegis::diesel::{GeographyValue, GeometryValue};
+
+                let (_container, mut c) = pg_conn($tag).await;
+                let point = geo::Point::new(1_490_000.0, 6_890_000.0);
+                let square = geo::Polygon::new(
+                    geo::LineString::from(vec![(13.0, 52.0), (14.0, 52.0), (14.0, 53.0), (13.0, 53.0), (13.0, 52.0)]),
+                    Vec::new(),
+                );
+                diesel::insert_into(typed_shapes::table)
+                    .values((
+                        typed_shapes::id.eq(1),
+                        typed_shapes::location.eq(GeometryValue::from(point)),
+                        typed_shapes::area.eq(GeographyValue::from(square.clone())),
+                    ))
+                    .execute(&mut c)
+                    .unwrap();
+
+                let (location, area): (GeometryValue<geo::Point<f64>>, GeographyValue<geo::Polygon<f64>>) =
+                    typed_shapes::table
+                        .select((typed_shapes::location, typed_shapes::area))
+                        .first(&mut c)
+                        .unwrap();
+                assert_eq!(location.0, point);
+                assert_eq!(area.0, square);
+
+                // PostGIS gives a geometry written without an SRID the column's SRID.
+                let location_ewkb: Vec<u8> =
+                    typed_shapes::table.select(typed_shapes::location).first(&mut c).unwrap();
+                assert_eq!(sqlitegis::core::ewkb::parse_ewkb(&location_ewkb).unwrap().1, Some(3857));
+
+                let wrong_kind: QueryResult<GeometryValue<geo::Polygon<f64>>> =
+                    typed_shapes::table.select(typed_shapes::location).first(&mut c);
+                let Err(diesel::result::Error::DeserializationError(error)) = wrong_kind else {
+                    panic!("A point must not deserialize as a polygon");
+                };
+                let cause = error
+                    .downcast_ref::<diesel::result::DeserializeFieldError>()
+                    .and_then(|field_error| field_error.error.downcast_ref::<sqlitegis::SqliteGisError>());
+                assert!(
+                    matches!(
+                        cause,
+                        Some(sqlitegis::SqliteGisError::WrongType { expected: "Polygon", actual: "Point" })
+                    ),
+                    "Unexpected error: {error:?}"
+                );
             }
 
             // -- 2. PostGIS I/O functions ---------------------------------

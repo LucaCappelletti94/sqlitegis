@@ -1072,3 +1072,63 @@ fn geometry_and_geography_values_roundtrip_through_not_null_columns() {
         Some(4326)
     );
 }
+
+#[test]
+fn narrowed_values_roundtrip_their_kind_and_reject_others() {
+    use sqlitegis::diesel::{GeographyValue, GeometryValue};
+
+    let mut c = required_shapes_conn();
+    let square = geo::Polygon::new(
+        geo::LineString::from(vec![
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (0.0, 0.0),
+        ]),
+        Vec::new(),
+    );
+    let point = geo::Point::new(13.4, 52.5);
+    diesel::insert_into(required_shapes::table)
+        .values((
+            required_shapes::id.eq(1),
+            required_shapes::geom.eq(GeometryValue::from(square.clone())),
+            required_shapes::geog.eq(GeographyValue::from(point)),
+        ))
+        .execute(&mut c)
+        .unwrap();
+
+    let (geom, geog): (
+        GeometryValue<geo::Polygon<f64>>,
+        GeographyValue<geo::Point<f64>>,
+    ) = required_shapes::table
+        .select((required_shapes::geom, required_shapes::geog))
+        .first(&mut c)
+        .unwrap();
+    assert_eq!(geom.0, square);
+    assert_eq!(geog.0, point);
+
+    let wrong_kind: QueryResult<GeometryValue<geo::LineString<f64>>> = required_shapes::table
+        .select(required_shapes::geom)
+        .first(&mut c);
+    let Err(diesel::result::Error::DeserializationError(error)) = wrong_kind else {
+        panic!("A polygon must not deserialize as a line string");
+    };
+    let cause = error
+        .downcast_ref::<diesel::result::DeserializeFieldError>()
+        .and_then(|field_error| {
+            field_error
+                .error
+                .downcast_ref::<sqlitegis::SqliteGisError>()
+        });
+    assert!(
+        matches!(
+            cause,
+            Some(sqlitegis::SqliteGisError::WrongType {
+                expected: "LineString",
+                actual: "Polygon"
+            })
+        ),
+        "Unexpected error: {error:?}"
+    );
+}
