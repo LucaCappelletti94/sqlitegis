@@ -4,6 +4,8 @@
 //! to PostGIS's native `geometry` / `geography` types in PostgreSQL,
 //! storing EWKB-encoded geometry.
 
+use crate::core::geometry_kind::GeometryKind;
+
 // SQL types
 
 /// Diesel SQL type for a geometry column (stored as EWKB BLOB).
@@ -32,7 +34,7 @@ pub struct Geometry;
 #[diesel(postgres_type(name = "geography"))]
 pub struct Geography;
 
-/// Defines a [`geo::Geometry<f64>`] wrapper bound to one spatial SQL type.
+/// Defines a wrapper of a [`GeometryKind`] bound to one spatial SQL type.
 macro_rules! geo_value {
     ($(#[$meta:meta])* $name:ident, $sql_type:ident) => {
         $(#[$meta])*
@@ -45,10 +47,10 @@ macro_rules! geo_value {
             derive(serde::Serialize, serde::Deserialize),
             serde(transparent)
         )]
-        pub struct $name(pub geo::Geometry<f64>);
+        pub struct $name<G = geo::Geometry<f64>>(pub G);
 
-        impl From<geo::Geometry<f64>> for $name {
-            fn from(geometry: geo::Geometry<f64>) -> Self {
+        impl<G: GeometryKind> From<G> for $name<G> {
+            fn from(geometry: G) -> Self {
                 Self(geometry)
             }
         }
@@ -58,6 +60,10 @@ macro_rules! geo_value {
 geo_value!(
     /// A [`geo::Geometry<f64>`] bindable to [`Geometry`] columns, nullable or
     /// NOT NULL. It is written without an SRID and read whatever its SRID.
+    ///
+    /// The parameter narrows the value to one [`GeometryKind`], as a PostGIS
+    /// `geometry(Point)` column does: `GeometryValue<geo::Point<f64>>` holds
+    /// only points, and reading another geometry into it fails.
     ///
     /// ```rust
     /// use diesel::prelude::*;
@@ -98,6 +104,10 @@ geo_value!(
 geo_value!(
     /// A [`geo::Geometry<f64>`] bindable to [`Geography`] columns, nullable or
     /// NOT NULL. It is written with SRID 4326 and reading it requires SRID 4326.
+    ///
+    /// The parameter narrows the value to one [`GeometryKind`], as a PostGIS
+    /// `geography(Point)` column does: `GeographyValue<geo::Point<f64>>` holds
+    /// only points, and reading another geometry into it fails.
     ///
     /// ```rust
     /// use diesel::prelude::*;
@@ -234,17 +244,20 @@ mod sqlite_impls {
                 }
             }
 
-            impl FromSql<$sql_type, Sqlite> for $value {
+            impl<G: GeometryKind> FromSql<$sql_type, Sqlite> for $value<G> {
                 fn from_sql(
                     bytes: <Sqlite as diesel::backend::Backend>::RawValue<'_>,
                 ) -> deserialize::Result<Self> {
-                    <geo::Geometry<f64> as FromSql<$sql_type, Sqlite>>::from_sql(bytes).map($value)
+                    let geometry =
+                        <geo::Geometry<f64> as FromSql<$sql_type, Sqlite>>::from_sql(bytes)?;
+                    Ok($value(G::from_geometry(geometry)?))
                 }
             }
 
-            impl ToSql<$sql_type, Sqlite> for $value {
+            impl<G: GeometryKind> ToSql<$sql_type, Sqlite> for $value<G> {
                 fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Sqlite>) -> serialize::Result {
-                    <geo::Geometry<f64> as ToSql<$sql_type, Sqlite>>::to_sql(&self.0, out)
+                    out.set_value(self.0.to_ewkb($srid)?);
+                    Ok(IsNull::No)
                 }
             }
         };
@@ -323,17 +336,19 @@ mod postgres_impls {
                 }
             }
 
-            impl FromSql<$sql_type, Pg> for $value {
+            impl<G: GeometryKind> FromSql<$sql_type, Pg> for $value<G> {
                 fn from_sql(
                     bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
                 ) -> deserialize::Result<Self> {
-                    <geo::Geometry<f64> as FromSql<$sql_type, Pg>>::from_sql(bytes).map($value)
+                    let geometry = <geo::Geometry<f64> as FromSql<$sql_type, Pg>>::from_sql(bytes)?;
+                    Ok($value(G::from_geometry(geometry)?))
                 }
             }
 
-            impl ToSql<$sql_type, Pg> for $value {
+            impl<G: GeometryKind> ToSql<$sql_type, Pg> for $value<G> {
                 fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
-                    <geo::Geometry<f64> as ToSql<$sql_type, Pg>>::to_sql(&self.0, out)
+                    IoWrite::write_all(out, &self.0.to_ewkb($srid)?)?;
+                    Ok(IsNull::No)
                 }
             }
         };

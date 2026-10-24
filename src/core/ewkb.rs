@@ -805,6 +805,12 @@ pub fn write_ewkb(geom: &Geometry<f64>, srid: Option<i32>) -> Result<Vec<u8>> {
         }
     }
 
+    write_wkb_with_srid(geom, srid)
+}
+
+/// Serialise any `geozero` geometry to ISO WKB, patched into EWKB when an
+/// SRID is given.
+pub(crate) fn write_wkb_with_srid<G: ToWkb>(geom: &G, srid: Option<i32>) -> Result<Vec<u8>> {
     // Use geozero to produce ISO WKB (XY only for now)
     let iso_wkb = geom
         .to_wkb(CoordDimensions::xy())
