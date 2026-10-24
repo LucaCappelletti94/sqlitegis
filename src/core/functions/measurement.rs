@@ -154,12 +154,16 @@ fn euclidean_geometry_distance(a: &Geometry<f64>, b: &Geometry<f64>) -> f64 {
 /// # Example
 ///
 /// ```
+/// use sqlitegis::core::functions::constructors::{st_make_line, st_point};
 /// use sqlitegis::core::functions::measurement::st_distance;
-/// use sqlitegis::core::functions::constructors::st_point;
 ///
-/// let a = st_point(0.0, 0.0, None).unwrap();
-/// let b = st_point(3.0, 4.0, None).unwrap();
-/// assert!((st_distance(&a, &b).unwrap() - 5.0).abs() < 1e-10);
+/// let line = st_make_line(
+///     &st_point(0.0, 0.0, None).unwrap(),
+///     &st_point(4.0, 0.0, None).unwrap(),
+/// )
+/// .unwrap();
+/// let p = st_point(2.0, 3.0, None).unwrap();
+/// assert!((st_distance(&p, &line).unwrap() - 3.0).abs() < 1e-10);
 /// ```
 pub fn st_distance(a: &[u8], b: &[u8]) -> Result<f64> {
     crate::core::functions::catch_geo("ST_Distance", || {
@@ -715,6 +719,8 @@ mod tests {
     use crate::core::functions::constructors::st_point;
     use crate::core::functions::io::geom_from_text;
 
+    type PairMeasure = fn(&[u8], &[u8]) -> Result<f64>;
+
     /// EWKB for a polygon whose ring has a NaN vertex, so `is_closed()` (a
     /// `first == last` compare) is false and geo's centroid `assert!` aborts.
     /// Fuzzer-found.
@@ -851,31 +857,18 @@ mod tests {
     }
 
     #[test]
-    fn st_distance_sphere_non_geographic_srid_errors() {
-        let a = st_point(0.0, 0.0, Some(3857)).unwrap();
-        let b = st_point(1.0, 1.0, Some(3857)).unwrap();
-        assert!(st_distance_sphere(&a, &b).is_err());
-    }
-
-    #[test]
-    fn st_distance_sphere_missing_srid_errors() {
-        let a = st_point(0.0, 0.0, None).unwrap();
-        let b = st_point(1.0, 1.0, None).unwrap();
-        assert!(st_distance_sphere(&a, &b).is_err());
-    }
-
-    #[test]
-    fn st_distance_spheroid_non_geographic_srid_errors() {
-        let a = st_point(0.0, 0.0, Some(3857)).unwrap();
-        let b = st_point(1.0, 1.0, Some(3857)).unwrap();
-        assert!(st_distance_spheroid(&a, &b).is_err());
-    }
-
-    #[test]
-    fn st_distance_spheroid_missing_srid_errors() {
-        let a = st_point(0.0, 0.0, None).unwrap();
-        let b = st_point(1.0, 1.0, None).unwrap();
-        assert!(st_distance_spheroid(&a, &b).is_err());
+    fn geodesic_distances_reject_non_geographic_or_missing_srid() {
+        let measures: [(&str, PairMeasure); 2] = [
+            ("st_distance_sphere", st_distance_sphere),
+            ("st_distance_spheroid", st_distance_spheroid),
+        ];
+        for (name, measure) in measures {
+            for srid in [Some(3857), None] {
+                let a = st_point(0.0, 0.0, srid).unwrap();
+                let b = st_point(1.0, 1.0, srid).unwrap();
+                assert!(measure(&a, &b).is_err(), "{name} with SRID {srid:?}");
+            }
+        }
     }
 
     #[test]
@@ -939,14 +932,6 @@ mod tests {
     fn hausdorff_identical_is_zero() {
         let line = geom_from_text("LINESTRING(0 0,1 1,2 0)", None).unwrap();
         assert!(st_hausdorff_distance(&line, &line).unwrap().abs() < 1e-10);
-    }
-
-    #[test]
-    fn st_hausdorff_distance_empty_point_errors() {
-        let empty = geom_from_text("POINT EMPTY", None).unwrap();
-        let pt = st_point(0.0, 0.0, None).unwrap();
-        let err = st_hausdorff_distance(&empty, &pt).expect_err("empty point must error");
-        assert!(format!("{err}").contains("does not accept empty geometries"));
     }
 
     // -- Closest point ----------------------------------------------
@@ -1074,32 +1059,34 @@ mod tests {
     }
 
     #[test]
-    fn st_distance_empty_point_errors() {
+    fn planar_distances_reject_empty_points() {
         let empty = geom_from_text("POINT EMPTY", None).unwrap();
         let pt = st_point(0.0, 0.0, None).unwrap();
-        let err = st_distance(&empty, &pt).expect_err("empty point must error");
-        assert!(format!("{err}").contains("does not accept empty geometries"));
+        let measures: [(&str, PairMeasure); 2] = [
+            ("st_distance", st_distance),
+            ("st_hausdorff_distance", st_hausdorff_distance),
+        ];
+        for (name, measure) in measures {
+            let err = measure(&empty, &pt).expect_err(name);
+            assert!(
+                format!("{err}").contains("does not accept empty geometries"),
+                "{name}: {err}"
+            );
+        }
     }
 
     #[test]
-    fn st_distance_sphere_empty_point_errors() {
+    fn geodesic_point_functions_reject_empty_points() {
         let empty = geom_from_text("POINT EMPTY", Some(4326)).unwrap();
         let pt = st_point(0.0, 0.0, Some(4326)).unwrap();
-        assert!(st_distance_sphere(&empty, &pt).is_err());
-    }
-
-    #[test]
-    fn st_distance_spheroid_empty_point_errors() {
-        let empty = geom_from_text("POINT EMPTY", Some(4326)).unwrap();
-        let pt = st_point(0.0, 0.0, Some(4326)).unwrap();
-        assert!(st_distance_spheroid(&empty, &pt).is_err());
-    }
-
-    #[test]
-    fn st_azimuth_empty_point_errors() {
-        let empty = geom_from_text("POINT EMPTY", Some(4326)).unwrap();
-        let pt = st_point(0.0, 0.0, Some(4326)).unwrap();
-        assert!(st_azimuth(&empty, &pt).is_err());
+        let measures: [(&str, PairMeasure); 3] = [
+            ("st_distance_sphere", st_distance_sphere),
+            ("st_distance_spheroid", st_distance_spheroid),
+            ("st_azimuth", st_azimuth),
+        ];
+        for (name, measure) in measures {
+            assert!(measure(&empty, &pt).is_err(), "{name}");
+        }
     }
 
     #[test]

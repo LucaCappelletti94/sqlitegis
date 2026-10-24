@@ -36,6 +36,8 @@ pub mod linear_referencing;
 pub mod measurement;
 pub mod operations;
 pub mod predicates;
+#[cfg(test)]
+mod test_support;
 
 /// Turn a panic from `geo` or `i_overlay` (both `assert!` on degenerate finite
 /// geometry) into an error, so a hostile blob cannot abort the process and the

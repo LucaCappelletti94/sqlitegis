@@ -507,6 +507,14 @@ mod tests {
     use crate::core::functions::constructors::st_point;
     use crate::core::functions::io::geom_from_text;
 
+    type Predicate = fn(&[u8], &[u8]) -> Result<bool>;
+
+    /// Each containment predicate beside its reverse, `reverse(b, a) == forward(a, b)`.
+    const REVERSED: [(&str, Predicate, Predicate); 2] = [
+        ("contains/within", st_contains, st_within),
+        ("covers/covered_by", st_covers, st_covered_by),
+    ];
+
     // -- de9im_pattern_match (private) ------------------------------
 
     #[test]
@@ -549,13 +557,16 @@ mod tests {
     // -- Predicate consistency --------------------------------------
 
     #[test]
-    fn within_is_reverse_contains() {
+    fn reversed_predicates_agree() {
         let poly = geom_from_text("POLYGON((0 0,4 0,4 4,0 4,0 0))", None).unwrap();
         let pt = st_point(2.0, 2.0, None).unwrap();
-        assert_eq!(
-            st_within(&pt, &poly).unwrap(),
-            st_contains(&poly, &pt).unwrap()
-        );
+        for (name, forward, reverse) in REVERSED {
+            assert_eq!(
+                reverse(&pt, &poly).unwrap(),
+                forward(&poly, &pt).unwrap(),
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -569,14 +580,16 @@ mod tests {
     }
 
     #[test]
-    fn contains_mbr_not_containing_returns_false() {
+    fn containment_mbr_not_containing_returns_false() {
         // A's bbox (0..2 in both axes) does not fully cover B's bbox (4..6).
-        // The MBR fastpath must short-circuit to false without decoding.
+        // The MBR fastpath must short-circuit to false without decoding, and
+        // each reverse predicate delegates to its forward one so inherits it.
         let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
         let b = geom_from_text("POLYGON((4 4,6 4,6 6,4 6,4 4))", None).unwrap();
-        assert!(!st_contains(&a, &b).unwrap());
-        // Symmetric: ST_Within delegates to st_contains so inherits the fastpath.
-        assert!(!st_within(&b, &a).unwrap());
+        for (name, forward, reverse) in REVERSED {
+            assert!(!forward(&a, &b).unwrap(), "{name}");
+            assert!(!reverse(&b, &a).unwrap(), "{name}");
+        }
     }
 
     #[test]
@@ -612,30 +625,12 @@ mod tests {
     }
 
     #[test]
-    fn covers_mbr_not_containing_returns_false() {
-        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
-        let b = geom_from_text("POLYGON((4 4,6 4,6 6,4 6,4 4))", None).unwrap();
-        assert!(!st_covers(&a, &b).unwrap());
-        assert!(!st_covered_by(&b, &a).unwrap());
-    }
-
-    #[test]
     fn contains_overlapping_mbrs_but_b_extends_outside_returns_false() {
         // MBRs overlap but B's right edge extends past A's right edge.
         // Fastpath should fire here too because A.contains(B.mbr) is false.
         let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
         let b = geom_from_text("POLYGON((1 1,3 1,3 3,1 3,1 1))", None).unwrap();
         assert!(!st_contains(&a, &b).unwrap());
-    }
-
-    #[test]
-    fn covered_by_is_reverse_covers() {
-        let poly = geom_from_text("POLYGON((0 0,4 0,4 4,0 4,0 0))", None).unwrap();
-        let pt = st_point(2.0, 2.0, None).unwrap();
-        assert_eq!(
-            st_covered_by(&pt, &poly).unwrap(),
-            st_covers(&poly, &pt).unwrap()
-        );
     }
 
     // -- Specific predicates ----------------------------------------

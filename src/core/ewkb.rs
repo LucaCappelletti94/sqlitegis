@@ -663,27 +663,13 @@ fn walk_for_mbr(
             offset += coord_size;
         }
         WKB_LINESTRING => {
-            let npoints = read_u32_at(blob, offset, little_endian)? as usize;
-            offset += 4;
-            for _ in 0..npoints {
-                let x = read_f64_at(blob, offset, little_endian)?;
-                let y = read_f64_at(blob, offset + 8, little_endian)?;
-                update_bbox(acc, x, y);
-                offset += coord_size;
-            }
+            offset = walk_points_for_mbr(blob, offset, coord_size, little_endian, acc)?;
         }
         WKB_POLYGON => {
             let nrings = read_u32_at(blob, offset, little_endian)? as usize;
             offset += 4;
             for _ in 0..nrings {
-                let npoints = read_u32_at(blob, offset, little_endian)? as usize;
-                offset += 4;
-                for _ in 0..npoints {
-                    let x = read_f64_at(blob, offset, little_endian)?;
-                    let y = read_f64_at(blob, offset + 8, little_endian)?;
-                    update_bbox(acc, x, y);
-                    offset += coord_size;
-                }
+                offset = walk_points_for_mbr(blob, offset, coord_size, little_endian, acc)?;
             }
         }
         WKB_MULTIPOINT | WKB_MULTILINESTRING | WKB_MULTIPOLYGON | WKB_GEOMETRYCOLLECTION => {
@@ -731,6 +717,26 @@ fn walk_for_mbr(
         }
     }
 
+    Ok(offset)
+}
+
+/// Walk a point count and that many coordinates at `offset`, updating `acc`
+/// with each (X, Y). Returns the offset just past the last coordinate.
+fn walk_points_for_mbr(
+    blob: &[u8],
+    mut offset: usize,
+    coord_size: usize,
+    little_endian: bool,
+    acc: &mut BboxAcc,
+) -> Result<usize> {
+    let npoints = read_u32_at(blob, offset, little_endian)? as usize;
+    offset += 4;
+    for _ in 0..npoints {
+        let x = read_f64_at(blob, offset, little_endian)?;
+        let y = read_f64_at(blob, offset + 8, little_endian)?;
+        update_bbox(acc, x, y);
+        offset += coord_size;
+    }
     Ok(offset)
 }
 
@@ -1896,20 +1902,19 @@ mod tests {
         assert!(validate_ewkb_payload(&blob).is_err());
     }
 
-    // -- Hardening: validate_nesting nested header truncated (lines 539-541) --
+    // -- Hardening: nested header errors in validate_nesting and walk_for_mbr --
 
     #[test]
-    fn validate_nesting_rejects_truncated_nested_header() {
+    fn nested_walkers_reject_truncated_nested_header() {
         let mut blob = vec![0x01];
         blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
         blob.extend_from_slice(&1u32.to_le_bytes());
         assert!(validate_ewkb_payload(&blob).is_err());
+        assert!(extract_mbr(&blob).is_err());
     }
 
-    // -- Hardening: validate_nesting invalid byte-order marker (lines 546-549) --
-
     #[test]
-    fn validate_nesting_rejects_invalid_nested_byte_order() {
+    fn nested_walkers_reject_invalid_nested_byte_order() {
         let mut blob = vec![0x01];
         blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
         blob.extend_from_slice(&1u32.to_le_bytes());
@@ -1918,6 +1923,7 @@ mod tests {
         blob.extend_from_slice(&1.0f64.to_le_bytes());
         blob.extend_from_slice(&2.0f64.to_le_bytes());
         assert!(validate_ewkb_payload(&blob).is_err());
+        assert!(extract_mbr(&blob).is_err());
     }
 
     // -- Hardening: validate_nesting unsupported type (lines 582-585) --
@@ -1942,28 +1948,6 @@ mod tests {
         blob.extend_from_slice(&1.0f64.to_le_bytes());
         blob.extend_from_slice(&2.0f64.to_le_bytes());
         assert!(validate_ewkb_payload(&blob).is_ok());
-    }
-
-    // -- Hardening: walk_for_mbr errors --
-
-    #[test]
-    fn walk_for_mbr_rejects_truncated_nested_header() {
-        let mut blob = vec![0x01];
-        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
-        blob.extend_from_slice(&1u32.to_le_bytes());
-        assert!(extract_mbr(&blob).is_err());
-    }
-
-    #[test]
-    fn walk_for_mbr_rejects_invalid_nested_byte_order() {
-        let mut blob = vec![0x01];
-        blob.extend_from_slice(&WKB_MULTIPOINT.to_le_bytes());
-        blob.extend_from_slice(&1u32.to_le_bytes());
-        blob.push(0xFF);
-        blob.extend_from_slice(&WKB_POINT.to_le_bytes());
-        blob.extend_from_slice(&1.0f64.to_le_bytes());
-        blob.extend_from_slice(&2.0f64.to_le_bytes());
-        assert!(extract_mbr(&blob).is_err());
     }
 
     #[test]

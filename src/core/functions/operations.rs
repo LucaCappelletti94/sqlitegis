@@ -142,39 +142,35 @@ fn intersect_bags(a: &GeometryBag, b: &GeometryBag) -> GeometryBag {
     }
 
     if !a.points.is_empty() && !b.polygons.is_empty() {
-        let mb = MultiPolygon::new(b.polygons.clone());
-        for p in &a.points {
-            if mb.intersects(p) {
-                out.points.push(*p);
-            }
-        }
+        keep_intersecting(
+            &a.points,
+            &MultiPolygon::new(b.polygons.clone()),
+            &mut out.points,
+        );
     }
 
     if !a.polygons.is_empty() && !b.points.is_empty() {
-        let ma = MultiPolygon::new(a.polygons.clone());
-        for p in &b.points {
-            if ma.intersects(p) {
-                out.points.push(*p);
-            }
-        }
+        keep_intersecting(
+            &b.points,
+            &MultiPolygon::new(a.polygons.clone()),
+            &mut out.points,
+        );
     }
 
     if !a.points.is_empty() && !b.lines.is_empty() {
-        let mls = MultiLineString::new(b.lines.clone());
-        for p in &a.points {
-            if mls.intersects(p) {
-                out.points.push(*p);
-            }
-        }
+        keep_intersecting(
+            &a.points,
+            &MultiLineString::new(b.lines.clone()),
+            &mut out.points,
+        );
     }
 
     if !a.lines.is_empty() && !b.points.is_empty() {
-        let mls = MultiLineString::new(a.lines.clone());
-        for p in &b.points {
-            if mls.intersects(p) {
-                out.points.push(*p);
-            }
-        }
+        keep_intersecting(
+            &b.points,
+            &MultiLineString::new(a.lines.clone()),
+            &mut out.points,
+        );
     }
 
     if !a.points.is_empty() && !b.points.is_empty() {
@@ -193,6 +189,15 @@ fn intersect_bags(a: &GeometryBag, b: &GeometryBag) -> GeometryBag {
     }
 
     out
+}
+
+/// Push every point of `points` that intersects `other` onto `out`.
+fn keep_intersecting<G: Intersects<Point<f64>>>(
+    points: &[Point<f64>],
+    other: &G,
+    out: &mut Vec<Point<f64>>,
+) {
+    out.extend(points.iter().filter(|p| other.intersects(*p)).copied());
 }
 
 /// Naive O(n*m) pairwise segment-intersection sweep. Sufficient for typical
@@ -599,6 +604,9 @@ mod tests {
     use crate::core::functions::constructors::st_point;
     use crate::core::functions::io::geom_from_text;
     use crate::core::functions::measurement::{st_area, st_point_on_surface};
+    use crate::core::functions::test_support::assert_wkt_close;
+
+    type BooleanOp = fn(&[u8], &[u8]) -> Result<Vec<u8>>;
 
     /// Fuzzer-reduced degenerate-but-finite polygon that makes `i_overlay` and
     /// geo's sweeps `assert!` and abort. The guard must turn that into an error.
@@ -625,35 +633,19 @@ mod tests {
     }
 
     #[test]
-    fn union_overlapping() {
+    fn boolean_ops_on_overlapping_squares() {
         let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
         let b = geom_from_text("POLYGON((1 0,3 0,3 2,1 2,1 0))", None).unwrap();
-        let u = st_union(&a, &b).unwrap();
-        assert!((st_area(&u).unwrap() - 6.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn intersection_overlapping() {
-        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
-        let b = geom_from_text("POLYGON((1 0,3 0,3 2,1 2,1 0))", None).unwrap();
-        let i = st_intersection(&a, &b).unwrap();
-        assert!((st_area(&i).unwrap() - 2.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn difference_overlapping() {
-        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
-        let b = geom_from_text("POLYGON((1 0,3 0,3 2,1 2,1 0))", None).unwrap();
-        let d = st_difference(&a, &b).unwrap();
-        assert!((st_area(&d).unwrap() - 2.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn sym_difference_overlapping() {
-        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
-        let b = geom_from_text("POLYGON((1 0,3 0,3 2,1 2,1 0))", None).unwrap();
-        let sd = st_sym_difference(&a, &b).unwrap();
-        assert!((st_area(&sd).unwrap() - 4.0).abs() < 1e-10);
+        let cases: [(&str, BooleanOp, f64); 4] = [
+            ("st_union", st_union, 6.0),
+            ("st_intersection", st_intersection, 2.0),
+            ("st_difference", st_difference, 2.0),
+            ("st_sym_difference", st_sym_difference, 4.0),
+        ];
+        for (name, op, area) in cases {
+            let out = op(&a, &b).unwrap();
+            assert!((st_area(&out).unwrap() - area).abs() < 1e-10, "{name}");
+        }
     }
 
     #[test]
@@ -949,22 +941,19 @@ mod tests {
     }
 
     #[test]
-    fn sym_difference_disjoint_concatenates_polygons() {
+    fn union_and_sym_difference_of_disjoint_squares_concatenate_polygons() {
         let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
         let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", None).unwrap();
-        let sd = st_sym_difference(&a, &b).unwrap();
-        assert!((st_area(&sd).unwrap() - 2.0).abs() < 1e-10);
-        assert_eq!(st_geometry_type(&sd).unwrap(), "ST_MultiPolygon");
-    }
-
-    #[test]
-    fn union_disjoint_concatenates_polygons() {
-        let a = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
-        let b = geom_from_text("POLYGON((10 10,11 10,11 11,10 11,10 10))", None).unwrap();
-        let u = st_union(&a, &b).unwrap();
-        // Two unit squares: total area 2.0.
-        assert!((st_area(&u).unwrap() - 2.0).abs() < 1e-10);
-        assert_eq!(st_geometry_type(&u).unwrap(), "ST_MultiPolygon");
+        let ops: [(&str, BooleanOp); 2] = [
+            ("st_union", st_union),
+            ("st_sym_difference", st_sym_difference),
+        ];
+        for (name, op) in ops {
+            let out = op(&a, &b).unwrap();
+            // Two unit squares: total area 2.0.
+            assert!((st_area(&out).unwrap() - 2.0).abs() < 1e-10, "{name}");
+            assert_eq!(st_geometry_type(&out).unwrap(), "ST_MultiPolygon", "{name}");
+        }
     }
 
     #[test]
@@ -1015,14 +1004,6 @@ mod tests {
     }
 
     #[test]
-    fn sym_difference_overlapping_slow_path() {
-        let a = geom_from_text("POLYGON((0 0,2 0,2 2,0 2,0 0))", None).unwrap();
-        let b = geom_from_text("POLYGON((1 0,3 0,3 2,1 2,1 0))", None).unwrap();
-        let sd = st_sym_difference(&a, &b).unwrap();
-        assert!((st_area(&sd).unwrap() - 4.0).abs() < 1e-10);
-    }
-
-    #[test]
     fn buffer_negative_large_distance_empty_result() {
         let poly = geom_from_text("POLYGON((0 0,1 0,1 1,0 1,0 0))", None).unwrap();
         let result = st_buffer(&poly, -10.0).unwrap();
@@ -1045,24 +1026,11 @@ mod tests {
     }
 
     // -- Segmentize ---------------------------------------------------
-
-    /// Reference values are PostGIS 3.5 readings. Its `geography` form
-    /// measures on the sphere, so `ST_SegmentizeSpheroid` has no PostGIS
-    /// counterpart to read and is pinned to the geodesic interpolation of
-    /// the same line instead.
-    fn assert_wkt_close(got: &str, want: &str) {
-        let nums = |s: &str| -> Vec<f64> {
-            s.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e'))
-                .filter(|t| !t.is_empty())
-                .filter_map(|t| t.parse::<f64>().ok())
-                .collect()
-        };
-        let (g, w) = (nums(got), nums(want));
-        assert_eq!(g.len(), w.len(), "shape differs: got {got}, want {want}");
-        for (a, b) in g.iter().zip(w.iter()) {
-            assert!((a - b).abs() < 1e-9, "got {got}, want {want}");
-        }
-    }
+    //
+    // Reference values are PostGIS 3.5 readings. Its `geography` form
+    // measures on the sphere, so `ST_SegmentizeSpheroid` has no PostGIS
+    // counterpart to read and is pinned to the geodesic interpolation of
+    // the same line instead.
 
     #[test]
     fn segmentize_planar_matches_postgis() {
